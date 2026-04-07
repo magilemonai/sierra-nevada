@@ -1,0 +1,1704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Lighthouse of Meridia</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;color:#aaa;font-family:'Press Start 2P','Courier New',monospace;font-size:11px;line-height:1.6;display:flex;justify-content:center;align-items:center;min-height:100vh;overflow:hidden}
+#game-container{width:644px;border:2px solid #5555FF;background:#000;box-shadow:0 0 30px rgba(85,85,255,0.3)}
+#title-bar{background:#0000AA;color:#FFFF55;padding:4px 8px;font-size:9px;display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #5555FF}
+#scene-wrapper{position:relative;width:640px;height:400px;border-bottom:2px solid #5555FF;overflow:hidden}
+#game-canvas{width:640px;height:400px;image-rendering:pixelated;image-rendering:-moz-crisp-edges;image-rendering:crisp-edges;display:block}
+#room-name{position:absolute;top:4px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.7);color:#55FFFF;padding:2px 10px;font-size:9px;letter-spacing:1px;border:1px solid #00AAAA;font-family:'Press Start 2P','Courier New',monospace}
+#inventory-bar{background:#0000AA;border-bottom:2px solid #5555FF;padding:4px 8px;min-height:24px;display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:8px;color:#55FF55}
+#text-output{height:160px;overflow-y:auto;padding:8px;background:#000;border-bottom:2px solid #5555FF;font-size:10px}
+#text-output::-webkit-scrollbar{width:8px}
+#text-output::-webkit-scrollbar-track{background:#000}
+#text-output::-webkit-scrollbar-thumb{background:#555;border:1px solid #0000AA}
+#text-output p{margin-bottom:6px;word-wrap:break-word}
+.narration{color:#AAAAAA} .system{color:#55FFFF} .error{color:#FF5555} .success{color:#55FF55}
+.input-echo{color:#FFFF55} .score-msg{color:#FF55FF} .victory{color:#FFFF55;text-align:center} .lore{color:#AA00AA}
+#input-area{display:flex;align-items:center;padding:6px 8px;background:#000055}
+#input-prompt{color:#55FF55;margin-right:6px;font-size:11px}
+#text-input{flex:1;background:transparent;border:none;color:#FFF;font-family:'Press Start 2P','Courier New',monospace;font-size:11px;outline:none;caret-color:#55FF55}
+#text-input::placeholder{color:#555}
+</style>
+</head>
+<body>
+<div id="game-container">
+<div id="title-bar">
+<span class="game-title">THE LIGHTHOUSE OF MERIDIA</span>
+<span id="score-display">Score: 0/100 | Turns: 0</span>
+</div>
+<div id="scene-wrapper">
+<canvas id="game-canvas" width="320" height="200"></canvas>
+<div id="room-name"></div>
+</div>
+<div id="inventory-bar">Inventory: (empty)</div>
+<div id="text-output"></div>
+<div id="input-area">
+<span id="input-prompt">&gt;</span>
+<input type="text" id="text-input" placeholder="Type a command..." autocomplete="off" autofocus>
+</div>
+</div>
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// EGA PALETTE
+// ═══════════════════════════════════════════════════════════════════
+const EGA = {
+  BLACK:'#000000',BLUE:'#0000AA',GREEN:'#00AA00',CYAN:'#00AAAA',
+  RED:'#AA0000',MAGENTA:'#AA00AA',BROWN:'#AA5500',LTGRAY:'#AAAAAA',
+  DKGRAY:'#555555',LTBLUE:'#5555FF',LTGREEN:'#55FF55',LTCYAN:'#55FFFF',
+  LTRED:'#FF5555',LTMAGENTA:'#FF55FF',YELLOW:'#FFFF55',WHITE:'#FFFFFF'
+};
+
+// ═══════════════════════════════════════════════════════════════════
+// GAME ENGINE
+// ═══════════════════════════════════════════════════════════════════
+const VERB_SYNONYMS = {
+  look:['look','examine','inspect','l','x'],take:['take','get','grab','pick'],
+  use:['use','put','place'],go:['go','walk','move'],talk:['talk','speak','ask'],
+  open:['open'],read:['read'],tie:['tie','attach'],light:['light','ignite'],
+  pour:['pour','fill'],unlock:['unlock'],search:['search','look in','check'],
+  answer:['answer','say','type'],push:['push'],pull:['pull'],eat:['eat','taste'],
+  swim:['swim'],climb:['climb'],save:['save'],drop:['drop'],cut:['cut','chop','hack'],
+  give:['give','feed'],pet:['pet','touch','stroke']
+};
+const VERB_LOOKUP = {};
+Object.keys(VERB_SYNONYMS).forEach(c => VERB_SYNONYMS[c].forEach(w => VERB_LOOKUP[w]=c));
+const DIR_MAP = {n:'north',s:'south',e:'east',w:'west',u:'up',d:'down',
+  north:'north',south:'south',east:'east',west:'west',up:'up',down:'down',enter:'enter',in:'enter'};
+const PREPS = ['on','to','in','with','at','from','into'];
+
+const state = {
+  currentRoom: null, inventory: [], score: 0, turns: 0, scored: {},
+  flags: {vines_cleared:false,lamp_lit:false,well_bridged:false,temple_open:false,
+    rope_tied:false,lighthouse_unlocked:false,lens_placed:false,oil_poured:false,
+    lighthouse_lit:false,hut_searched:false,journal_read:false}
+};
+
+let canvas, ctx, outputEl, inputEl, roomNameEl;
+
+function addText(text, cls) {
+  const p = document.createElement('p');
+  if(cls) p.className = cls;
+  p.textContent = text;
+  outputEl.appendChild(p);
+  outputEl.scrollTop = outputEl.scrollHeight;
+}
+
+function addScore(pts, reason) {
+  if(state.scored[reason]) return;
+  state.scored[reason] = true;
+  state.score += pts;
+  addText('[Score +'+pts+': '+reason+']  (Total: '+state.score+'/100)', 'system');
+  document.getElementById('score-display').textContent = 'Score: '+state.score+'/100 | Turns: '+state.turns;
+  playSuccess();
+}
+
+function addItem(id) { if(!state.inventory.includes(id)){state.inventory.push(id);updateInv();playPickup();} }
+function removeItem(id) { state.inventory=state.inventory.filter(x=>x!==id);updateInv(); }
+function hasItem(id) { return state.inventory.includes(id); }
+
+const ITEM_NAMES = {
+  plank:'Wooden Plank',rope:'Sturdy Rope',oil_lamp:'Oil Lamp',machete:'Rusty Machete',
+  bucket:'Old Bucket',rusty_key:'Rusty Key',flint:'Flint & Steel',oil_flask:'Flask of Oil',
+  crystal_lens:'Crystal Lens',exotic_fruit:'Exotic Fruit'
+};
+
+function updateInv() {
+  const el = document.getElementById('inventory-bar');
+  if(state.inventory.length===0) el.textContent='Inventory: (empty)';
+  else el.textContent='Inventory: '+state.inventory.map(id=>ITEM_NAMES[id]||id).join(', ');
+}
+
+function updateScore() {
+  document.getElementById('score-display').textContent='Score: '+state.score+'/100 | Turns: '+state.turns;
+}
+
+// Audio
+let audioCtx;
+function getAC(){if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();return audioCtx;}
+function playBeep(f,d){try{const ac=getAC(),o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=f;g.gain.value=0.06;o.connect(g);g.connect(ac.destination);o.start(ac.currentTime);o.stop(ac.currentTime+d/1000);}catch(e){}}
+function playSuccess(){try{const ac=getAC();[440,554,659,880].forEach((f,i)=>{const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=f;g.gain.value=0.06;g.gain.setValueAtTime(0.06,ac.currentTime+i*0.12);g.gain.exponentialRampToValueAtTime(0.001,ac.currentTime+i*0.12+0.15);o.connect(g);g.connect(ac.destination);o.start(ac.currentTime+i*0.12);o.stop(ac.currentTime+i*0.12+0.15);});}catch(e){}}
+function playError(){try{const ac=getAC();[330,220].forEach((f,i)=>{const o=ac.createOscillator(),g=ac.createGain();o.type='sawtooth';o.frequency.value=f;g.gain.value=0.04;o.connect(g);g.connect(ac.destination);o.start(ac.currentTime+i*0.15);o.stop(ac.currentTime+i*0.15+0.2);});}catch(e){}}
+function playPickup(){try{const ac=getAC(),o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.setValueAtTime(660,ac.currentTime);o.frequency.exponentialRampToValueAtTime(1320,ac.currentTime+0.08);g.gain.value=0.06;o.connect(g);g.connect(ac.destination);o.start(ac.currentTime);o.stop(ac.currentTime+0.12);}catch(e){}}
+function playVictoryFanfare(){try{const ac=getAC();[523,659,784,1047,784,1047,1319].forEach((f,i)=>{const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=f;g.gain.value=0.07;g.gain.setValueAtTime(0.07,ac.currentTime+i*0.2);g.gain.exponentialRampToValueAtTime(0.001,ac.currentTime+i*0.2+0.25);o.connect(g);g.connect(ac.destination);o.start(ac.currentTime+i*0.2);o.stop(ac.currentTime+i*0.2+0.25);});}catch(e){}}
+
+function parseInput(raw) {
+  const input = raw.trim().toLowerCase();
+  if(!input) return null;
+  if(input==='i'||input==='inventory') return {verb:'inventory',noun:null,prep:null,noun2:null};
+  if(input==='help') return {verb:'help',noun:null,prep:null,noun2:null};
+  if(DIR_MAP[input]) return {verb:'go',noun:DIR_MAP[input],prep:null,noun2:null};
+  // Handle direct riddle answer "map"
+  if(input==='map') return {verb:'answer',noun:'map',prep:null,noun2:null};
+  let tokens = input.split(/\s+/);
+  if(tokens.length>=2&&tokens[0]==='pick'&&tokens[1]==='up'){tokens.splice(0,2,'take');}
+  if(tokens.length>=2&&tokens[0]==='look'&&tokens[1]==='in'){tokens.splice(0,2,'search');}
+  if(tokens.length>=2&&tokens[0]==='climb'&&tokens[1]==='down'){return{verb:'go',noun:'down',prep:null,noun2:null};}
+  if(tokens.length>=2&&tokens[0]==='climb'&&tokens[1]==='up'){return{verb:'go',noun:'up',prep:null,noun2:null};}
+  let verbWord = tokens[0];
+  let verb = VERB_LOOKUP[verbWord]||verbWord;
+  if(DIR_MAP[verb]) return {verb:'go',noun:DIR_MAP[verb],prep:null,noun2:null};
+  let rest = tokens.slice(1);
+  if((verb==='look'||verb==='examine')&&rest.length>0&&rest[0]==='at') rest=rest.slice(1);
+  if(verb==='look'&&rest.length===0) return {verb:'look',noun:null,prep:null,noun2:null};
+  // Find preposition
+  let prep=null,noun=null,noun2=null,pi=-1;
+  for(let i=0;i<rest.length;i++){if(PREPS.includes(rest[i])){pi=i;prep=rest[i];break;}}
+  if(pi>-1){noun=rest.slice(0,pi).join(' ')||null;noun2=rest.slice(pi+1).join(' ')||null;}
+  else{noun=rest.join(' ')||null;}
+  if(verb==='go'&&noun&&DIR_MAP[noun])noun=DIR_MAP[noun];
+  return {verb,noun,prep,noun2};
+}
+
+function moveToRoom(roomId) {
+  if(!ROOMS[roomId]){addText("You can't go that way.",'error');playError();return;}
+  state.currentRoom = roomId;
+  const room = ROOMS[roomId];
+  roomNameEl.textContent = room.name;
+  addText('');
+  addText('\u2014 '+room.name+' \u2014','narration');
+  addText(room.getDescription(),'narration');
+  drawCurrentScene();
+}
+
+function drawCurrentScene() {
+  if(SCENES[state.currentRoom]) {
+    ctx.imageSmoothingEnabled = false;
+    SCENES[state.currentRoom](ctx, 320, 200, state);
+  }
+}
+
+function redrawScene() { drawCurrentScene(); }
+
+function processCommand(raw) {
+  const cmd = parseInput(raw);
+  if(!cmd) return;
+  state.turns++;
+  updateScore();
+  addText('> '+raw.trim(),'input-echo');
+
+  if(cmd.verb==='inventory'){
+    if(state.inventory.length===0) addText('You are not carrying anything.');
+    else { addText('You are carrying:'); state.inventory.forEach(id=>addText('  - '+(ITEM_NAMES[id]||id))); }
+    return;
+  }
+  if(cmd.verb==='help'){
+    addText('Commands: LOOK, TAKE, USE [x] ON [y], GO [dir], N/S/E/W/U/D','system');
+    addText('TALK, OPEN, UNLOCK, SEARCH, READ, TIE, LIGHT, POUR','system');
+    addText('EAT, SWIM, CUT, GIVE, PET, ANSWER, INVENTORY (I), HELP','system');
+    return;
+  }
+  if(cmd.verb==='look'&&!cmd.noun){
+    const room=ROOMS[state.currentRoom];
+    if(room){addText('\u2014 '+room.name+' \u2014','narration');addText(room.getDescription(),'narration');drawCurrentScene();}
+    return;
+  }
+  if(cmd.verb==='go'){
+    const room=ROOMS[state.currentRoom];
+    if(!room){return;}
+    const dir=cmd.noun;
+    const exit=room.exits[dir];
+    if(!exit){addText("You can't go that way.",'error');playError();return;}
+    if(typeof exit==='string'){moveToRoom(exit);return;}
+    if(typeof exit==='object'){
+      if(exit.blocked){
+        const flag=exit.blocked;
+        if(!state.flags[flag]){addText(exit.blockedMsg||"The way is blocked.",'error');playError();return;}
+      }
+      moveToRoom(exit.room);return;
+    }
+    return;
+  }
+  if(cmd.verb==='save'){
+    try{localStorage.setItem('meridia_save',JSON.stringify(state));addText('Game saved.','system');playSuccess();}catch(e){addText('Save failed.','error');}
+    return;
+  }
+  // Look at inventory items
+  if(cmd.verb==='look'&&cmd.noun){
+    const invDesc = getInventoryItemDesc(cmd.noun);
+    if(invDesc){addText(invDesc);return;}
+  }
+  // Room-specific handler
+  if(handleRoomCommand(cmd)) return;
+  // Defaults
+  switch(cmd.verb){
+    case'take':addText("You don't see that here.");break;
+    case'use':addText("That doesn't seem to work.");break;
+    case'look':addText("You don't see anything special about that.");break;
+    case'talk':addText("There's nobody here to talk to.");break;
+    case'open':case'unlock':addText("You can't open that.");break;
+    case'read':addText("There's nothing to read here.");break;
+    case'search':addText("You don't find anything interesting.");break;
+    case'eat':addText("You can't eat that!");break;
+    case'swim':addText("The currents are far too dangerous!");break;
+    case'climb':addText("You can't climb that.");break;
+    case'push':case'pull':addText("Nothing happens.");break;
+    case'tie':addText("You can't tie that to anything useful.");break;
+    case'light':addText("You can't light that.");break;
+    case'pour':addText("There's nothing to pour.");break;
+    case'cut':addText("There's nothing to cut here.");break;
+    case'drop':addText("You might need that. Better hold onto it.");break;
+    case'pet':addText("There's nothing here to pet.");break;
+    case'give':addText("There's nobody to give that to.");break;
+    default:addText('I don\'t understand "'+cmd.verb+'". Type HELP for commands.','error');break;
+  }
+}
+
+function getInventoryItemDesc(noun) {
+  const n = noun.replace(/\s+/g,'_');
+  const aliases = {
+    plank:['plank','wood','wooden plank','board'],rope:['rope','sturdy rope'],
+    oil_lamp:['lamp','oil lamp','lantern'],machete:['machete','blade','rusty machete'],
+    bucket:['bucket','old bucket','pail'],rusty_key:['key','rusty key','iron key'],
+    flint:['flint','flint and steel','steel','flint & steel'],oil_flask:['flask','oil flask','oil','sacred oil'],
+    crystal_lens:['lens','crystal','crystal lens'],exotic_fruit:['fruit','exotic fruit']
+  };
+  let itemId = null;
+  for(const[id,names]of Object.entries(aliases)){
+    if(names.includes(noun)||names.includes(n)||id===n){if(hasItem(id)){itemId=id;break;}}
+  }
+  if(!itemId) return null;
+  const descs = {
+    plank:"A sturdy wooden plank, about four feet long. Pulled from the shipwreck.",
+    rope:"A length of strong hemp rope, about thirty feet long.",
+    oil_lamp:state.flags.lamp_lit?"An old brass oil lamp. Its flame flickers warmly.":"An old brass oil lamp. It has oil but isn't lit yet.",
+    machete:"A rusty but sharp machete. Still cuts well enough.",
+    bucket:"A battered wooden bucket with a rope handle.",
+    rusty_key:"A heavy iron key, covered in rust and barnacles. Looks ancient.",
+    flint:"A flint stone and steel striker. Good for starting fires.",
+    oil_flask:"A sealed clay flask containing sacred oil. It sloshes gently when shaken.",
+    crystal_lens:"A magnificent crystal lens that seems to glow from within. It's warm to the touch.",
+    exotic_fruit:"A colorful tropical fruit that smells sweet and slightly otherworldly."
+  };
+  if(descs[itemId]){addText(descs[itemId]);return true;}
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SCENE DRAWING FUNCTIONS (EGA Pixel Art)
+// ═══════════════════════════════════════════════════════════════════
+
+// Helper functions
+function drawSky(c,y1,y2,colors){
+  const h=y2-y1,n=colors.length;
+  for(let i=0;i<n;i++){c.fillStyle=colors[i];const sy=y1+Math.floor(i*h/n),ey=y1+Math.floor((i+1)*h/n);c.fillRect(0,sy,320,ey-sy);}
+}
+function drawOcean(c,y,h){
+  c.fillStyle=EGA.BLUE;c.fillRect(0,y,320,h);
+  for(let row=0;row<h;row+=4){
+    c.fillStyle=(row%8===0)?EGA.LTBLUE:EGA.CYAN;
+    for(let x=((row/4)%2)*12;x<320;x+=24){c.fillRect(x,y+row,10,2);}
+  }
+}
+function drawCloud(c,x,y){
+  c.fillStyle=EGA.WHITE;
+  c.fillRect(x,y,20,4);c.fillRect(x-4,y+2,28,4);c.fillRect(x,y+4,20,2);
+}
+function drawPalm(c,x,y){
+  c.fillStyle=EGA.BROWN;c.fillRect(x,y,4,30);c.fillRect(x+1,y+30,2,10);
+  c.fillStyle=EGA.GREEN;
+  c.fillRect(x-12,y-4,14,4);c.fillRect(x-16,y-8,12,4);
+  c.fillRect(x+4,y-4,14,4);c.fillRect(x+8,y-8,12,4);
+  c.fillRect(x-4,y-8,12,4);
+  c.fillStyle=EGA.LTGREEN;
+  c.fillRect(x-10,y-6,8,2);c.fillRect(x+6,y-6,8,2);
+}
+function drawSeagull(c,x,y){
+  c.fillStyle=EGA.WHITE;c.fillRect(x,y,2,1);c.fillRect(x+3,y,2,1);c.fillRect(x+2,y+1,1,1);
+}
+function drawStars(c,count){
+  c.fillStyle=EGA.WHITE;
+  const rng=n=>{let s=n;return()=>{s=(s*16807)%2147483647;return s/2147483647;}};
+  const r=rng(42);
+  for(let i=0;i<count;i++){c.fillRect(Math.floor(r()*318)+1,Math.floor(r()*80)+2,1,1);}
+  c.fillStyle=EGA.YELLOW;
+  for(let i=0;i<count/3;i++){c.fillRect(Math.floor(r()*318)+1,Math.floor(r()*80)+2,1,1);}
+}
+
+// ── BEACH ──────────────────────────────────────────────────────
+function drawBeach(c,w,h,st){
+  // Sky
+  drawSky(c,0,80,[EGA.LTBLUE,EGA.LTBLUE,EGA.LTCYAN,EGA.LTCYAN]);
+  drawCloud(c,40,15);drawCloud(c,180,10);drawCloud(c,260,22);
+  // Ocean
+  drawOcean(c,80,50);
+  // Beach sand
+  c.fillStyle=EGA.YELLOW;c.fillRect(0,130,320,70);
+  c.fillStyle=EGA.BROWN;
+  for(let x=0;x<320;x+=6){if((x/6)%3===0)c.fillRect(x,130+Math.sin(x*0.1)*3,4,2);}
+  // Wet sand near water
+  c.fillStyle=EGA.BROWN;c.fillRect(0,128,320,4);
+  // Foam line
+  c.fillStyle=EGA.WHITE;
+  for(let x=0;x<320;x+=8){c.fillRect(x,126+Math.sin(x*0.15)*2,6,2);}
+  // Ship wreckage
+  c.fillStyle=EGA.BROWN;
+  c.fillRect(200,100,60,30);c.fillRect(195,110,70,20);c.fillRect(190,120,75,12);
+  // Broken hull planks
+  c.fillStyle=EGA.BROWN;c.fillRect(210,95,4,35);c.fillRect(230,90,4,40);c.fillRect(250,98,4,32);
+  // Broken mast
+  c.fillStyle=EGA.BROWN;c.fillRect(228,60,4,40);c.fillRect(226,58,8,4);
+  // Torn sail
+  c.fillStyle=EGA.WHITE;c.fillRect(232,62,16,20);c.fillStyle=EGA.LTGRAY;c.fillRect(232,74,16,8);
+  c.fillStyle=EGA.LTGRAY;c.fillRect(244,68,8,6);
+  // Rope on mast (if not taken)
+  if(!st.inventory.includes('rope')){
+    c.fillStyle=EGA.BROWN;c.fillRect(224,65,4,2);c.fillRect(222,67,3,2);c.fillRect(220,69,3,2);c.fillRect(218,71,4,2);c.fillRect(216,73,5,2);
+  }
+  // Plank in debris (if not taken)
+  if(!st.inventory.includes('plank')){
+    c.fillStyle=EGA.YELLOW;c.fillRect(150,150,40,6);c.fillStyle=EGA.BROWN;c.fillRect(150,150,40,1);c.fillRect(150,155,40,1);
+  }
+  // Scattered debris
+  c.fillStyle=EGA.BROWN;c.fillRect(120,160,8,3);c.fillRect(280,145,6,3);c.fillRect(100,170,10,2);
+  // Seagulls
+  drawSeagull(c,60,30);drawSeagull(c,140,20);drawSeagull(c,290,35);
+  // Path indicator north
+  c.fillStyle=EGA.LTGRAY;c.fillRect(145,130,30,4);c.fillRect(148,126,24,4);
+  c.fillStyle=EGA.DKGRAY;c.fillRect(152,122,16,4);
+  // Shells
+  c.fillStyle=EGA.WHITE;c.fillRect(80,165,3,2);c.fillRect(300,168,2,2);c.fillRect(50,175,3,2);
+}
+
+// ── COASTAL PATH ───────────────────────────────────────────────
+function drawCoastalPath(c,w,h,st){
+  drawSky(c,0,60,[EGA.LTBLUE,EGA.LTBLUE,EGA.LTCYAN]);
+  drawCloud(c,100,12);drawCloud(c,220,8);
+  // Ocean far right
+  drawOcean(c,60,40);
+  // Cliffs
+  c.fillStyle=EGA.DKGRAY;c.fillRect(0,50,120,150);c.fillRect(260,50,60,150);
+  c.fillStyle=EGA.LTGRAY;c.fillRect(5,55,20,8);c.fillRect(40,70,15,6);c.fillRect(80,60,25,8);
+  c.fillRect(265,65,20,6);c.fillRect(285,55,15,8);
+  // Rocky path
+  c.fillStyle=EGA.LTGRAY;c.fillRect(120,100,140,100);
+  c.fillStyle=EGA.DKGRAY;
+  for(let x=125;x<255;x+=8){for(let y=105;y<195;y+=8){if((x+y)%16===0)c.fillRect(x,y,4,4);}}
+  // Cave entrance (west)
+  c.fillStyle=EGA.BLACK;c.fillRect(30,90,60,70);
+  c.fillStyle=EGA.DKGRAY;
+  c.fillRect(25,85,70,8);c.fillRect(20,80,10,16);c.fillRect(85,80,10,16);
+  c.fillRect(28,155,64,8);
+  // Stalactite hints at cave mouth
+  c.fillStyle=EGA.LTGRAY;c.fillRect(40,85,4,10);c.fillRect(60,85,3,8);c.fillRect(75,85,4,12);
+  // Jungle wall (east) - with or without vines
+  c.fillStyle=EGA.GREEN;c.fillRect(260,50,60,60);
+  c.fillStyle=EGA.LTGREEN;c.fillRect(265,55,12,20);c.fillRect(285,60,15,25);c.fillRect(270,45,20,15);
+  if(!st.flags.vines_cleared){
+    // Thick vines blocking
+    c.fillStyle=EGA.GREEN;c.fillRect(255,80,8,80);c.fillRect(262,75,6,90);c.fillRect(250,90,6,70);
+    c.fillStyle=EGA.BROWN;c.fillRect(257,85,3,70);c.fillRect(264,80,2,80);
+    c.fillStyle=EGA.LTGREEN;c.fillRect(252,85,5,4);c.fillRect(260,95,5,4);c.fillRect(255,110,6,4);
+  } else {
+    // Cleared path
+    c.fillStyle=EGA.LTGRAY;c.fillRect(258,100,20,60);
+    c.fillStyle=EGA.BROWN;c.fillRect(255,155,4,8);c.fillRect(275,150,4,10);// cut vine stumps
+  }
+  // Path going north
+  c.fillStyle=EGA.LTGRAY;c.fillRect(160,90,40,15);c.fillStyle=EGA.DKGRAY;c.fillRect(165,85,30,8);
+  // Path going south
+  c.fillStyle=EGA.LTGRAY;c.fillRect(155,195,50,5);
+  // Small rocks
+  c.fillStyle=EGA.DKGRAY;c.fillRect(135,140,6,4);c.fillRect(230,120,8,5);c.fillRect(180,165,5,3);
+}
+
+// ── VILLAGE ────────────────────────────────────────────────────
+function drawVillage(c,w,h,st){
+  drawSky(c,0,50,[EGA.LTBLUE,EGA.LTCYAN]);
+  drawCloud(c,80,10);drawCloud(c,250,15);
+  // Background vegetation
+  c.fillStyle=EGA.GREEN;c.fillRect(0,40,320,30);
+  c.fillStyle=EGA.LTGREEN;c.fillRect(10,35,30,15);c.fillRect(80,38,25,12);c.fillRect(250,32,40,18);
+  // Ground - cobblestone
+  c.fillStyle=EGA.DKGRAY;c.fillRect(0,70,320,130);
+  c.fillStyle=EGA.LTGRAY;
+  for(let x=0;x<320;x+=10){for(let y=75;y<200;y+=10){if((x+y)%20===0)c.fillRect(x+1,y+1,8,8);}}
+  // Left hut
+  c.fillStyle=EGA.LTGRAY;c.fillRect(20,80,70,60);
+  c.fillStyle=EGA.DKGRAY;c.fillRect(18,78,74,4);
+  // Roof
+  c.fillStyle=EGA.BROWN;c.fillRect(15,65,80,16);c.fillRect(20,60,70,8);c.fillRect(30,56,50,6);
+  // Broken roof part
+  c.fillStyle=EGA.DKGRAY;c.fillRect(60,60,20,6);
+  // Door
+  c.fillStyle=EGA.BROWN;c.fillRect(45,110,16,30);c.fillStyle=EGA.BLACK;c.fillRect(47,112,12,28);
+  // Window with glow if lamp not taken
+  c.fillStyle=EGA.BLACK;c.fillRect(30,95,12,12);
+  if(!st.flags.hut_searched){c.fillStyle=EGA.YELLOW;c.fillRect(31,96,10,10);c.fillStyle=EGA.BROWN;c.fillRect(36,96,1,10);c.fillRect(31,100,10,1);}
+  // Well in center
+  c.fillStyle=EGA.LTGRAY;c.fillRect(140,110,40,30);
+  c.fillStyle=EGA.DKGRAY;c.fillRect(138,108,44,4);c.fillRect(138,138,44,4);
+  c.fillStyle=EGA.BLACK;c.fillRect(145,114,30,22);
+  // Well posts and roof
+  c.fillStyle=EGA.BROWN;c.fillRect(142,85,4,28);c.fillRect(176,85,4,28);
+  c.fillRect(140,82,42,4);c.fillRect(142,78,38,6);
+  // Plank on well if placed
+  if(st.flags.well_bridged){
+    c.fillStyle=EGA.YELLOW;c.fillRect(143,122,36,4);
+  }
+  // Bucket by well (if not taken)
+  if(!st.inventory.includes('bucket')){
+    c.fillStyle=EGA.BROWN;c.fillRect(185,130,10,10);c.fillStyle=EGA.DKGRAY;c.fillRect(185,128,10,3);
+  }
+  // Merchant stall (right)
+  c.fillStyle=EGA.BROWN;c.fillRect(240,95,60,8);c.fillRect(242,103,4,40);c.fillRect(292,103,4,40);
+  c.fillStyle=EGA.LTGRAY;c.fillRect(238,88,66,8);
+  // Machete on stall (if not taken)
+  if(!st.inventory.includes('machete')){
+    c.fillStyle=EGA.LTGRAY;c.fillRect(255,92,30,3);c.fillStyle=EGA.BROWN;c.fillRect(250,91,8,5);
+  }
+  // Moss and vegetation
+  c.fillStyle=EGA.GREEN;c.fillRect(90,130,8,4);c.fillRect(200,150,6,3);c.fillRect(15,135,10,5);
+  c.fillStyle=EGA.LTGREEN;c.fillRect(92,128,4,2);c.fillRect(202,148,3,2);
+  // Path south
+  c.fillStyle=EGA.LTGRAY;c.fillRect(145,195,30,5);
+}
+
+// ── CAVE ───────────────────────────────────────────────────────
+function drawCave(c,w,h,st){
+  // Mostly dark
+  c.fillStyle=EGA.BLACK;c.fillRect(0,0,320,200);
+  // Cave walls
+  c.fillStyle=EGA.DKGRAY;
+  c.fillRect(0,0,320,15);c.fillRect(0,180,320,20);
+  c.fillRect(0,0,30,200);c.fillRect(0,15,50,8);c.fillRect(0,170,60,10);
+  // Entrance light cone from right
+  c.fillStyle=EGA.BROWN;
+  c.fillRect(280,40,40,120);
+  c.fillStyle=EGA.YELLOW;
+  c.fillRect(290,50,30,100);
+  c.fillStyle=EGA.WHITE;
+  c.fillRect(300,60,20,80);
+  // Entrance arch
+  c.fillStyle=EGA.DKGRAY;c.fillRect(275,30,10,140);c.fillRect(270,25,50,10);c.fillRect(270,165,50,15);
+  c.fillStyle=EGA.LTGRAY;c.fillRect(277,35,6,5);c.fillRect(277,155,6,5);
+  // Stalactites
+  c.fillStyle=EGA.DKGRAY;
+  c.fillRect(60,10,4,16);c.fillRect(100,8,3,20);c.fillRect(150,12,5,14);c.fillRect(200,10,3,18);c.fillRect(240,8,4,12);
+  c.fillStyle=EGA.LTGRAY;
+  c.fillRect(61,12,2,8);c.fillRect(101,10,1,12);c.fillRect(151,14,2,8);
+  // Stalagmites
+  c.fillStyle=EGA.DKGRAY;
+  c.fillRect(80,170,6,10);c.fillRect(130,172,4,8);c.fillRect(190,168,5,12);
+  // Water glistening
+  c.fillStyle=EGA.LTBLUE;
+  c.fillRect(45,60,2,2);c.fillRect(90,45,2,2);c.fillRect(180,55,2,2);c.fillRect(120,80,2,2);
+  c.fillRect(70,130,2,2);c.fillRect(160,140,2,2);
+  // Flint on ledge near entrance (if not taken)
+  if(!st.inventory.includes('flint')){
+    c.fillStyle=EGA.LTGRAY;c.fillRect(240,130,12,6);// ledge
+    c.fillStyle=EGA.YELLOW;c.fillRect(244,126,4,4);// flint
+    c.fillStyle=EGA.DKGRAY;c.fillRect(248,127,3,3);// steel
+  }
+  // Ground near entrance
+  c.fillStyle=EGA.BROWN;c.fillRect(250,160,30,20);c.fillRect(230,170,20,10);
+  // If lamp lit - show deeper area
+  if(st.flags.lamp_lit){
+    // Warm glow in deeper area
+    c.fillStyle=EGA.BROWN;c.fillRect(40,50,100,120);
+    c.fillStyle=EGA.YELLOW;
+    c.fillRect(55,65,70,90);
+    c.fillStyle=EGA.BROWN;
+    c.fillRect(50,60,80,100);
+    // Redraw walls over glow
+    c.fillStyle=EGA.DKGRAY;
+    c.fillRect(0,0,320,15);c.fillRect(0,180,320,20);c.fillRect(0,0,30,200);
+    // Stalactites again
+    c.fillRect(60,10,4,16);c.fillRect(100,8,3,20);
+    // Natural shelf with oil flask
+    c.fillStyle=EGA.LTGRAY;c.fillRect(50,100,30,6);
+    if(!st.inventory.includes('oil_flask')){
+      c.fillStyle=EGA.BROWN;c.fillRect(58,90,8,10);c.fillStyle=EGA.YELLOW;c.fillRect(60,92,4,6);
+    }
+    // Journal on ground
+    if(!st.flags.journal_read && !st.inventory.includes('journal')){
+      c.fillStyle=EGA.LTGRAY;c.fillRect(80,165,12,6);c.fillStyle=EGA.BROWN;c.fillRect(81,166,10,4);
+    }
+    // Lamp glow icon
+    c.fillStyle=EGA.YELLOW;c.fillRect(140,100,6,8);c.fillStyle=EGA.WHITE;c.fillRect(141,97,4,3);
+  } else {
+    // Deep darkness with question marks
+    c.fillStyle=EGA.DKGRAY;
+    // "???" hint
+    c.fillRect(80,100,3,3);c.fillRect(84,97,2,2);c.fillRect(80,97,3,2);c.fillRect(84,99,2,3);c.fillRect(80,104,3,2);
+  }
+  // Cave floor texture
+  c.fillStyle=EGA.DKGRAY;
+  c.fillRect(200,175,8,3);c.fillRect(160,178,6,2);c.fillRect(120,176,10,4);
+}
+
+
+// ── JUNGLE ─────────────────────────────────────────────────────
+function drawJungle(c,w,h,st){
+  // Dense canopy sky
+  c.fillStyle=EGA.GREEN;c.fillRect(0,0,320,200);
+  // Canopy with light filtering
+  c.fillStyle=EGA.LTGREEN;
+  c.fillRect(0,0,60,30);c.fillRect(80,0,50,25);c.fillRect(160,0,40,20);c.fillRect(220,0,60,28);c.fillRect(300,0,20,22);
+  // Light dapples
+  c.fillStyle=EGA.YELLOW;
+  c.fillRect(40,10,8,4);c.fillRect(120,8,6,4);c.fillRect(200,12,8,4);c.fillRect(280,6,6,4);
+  // Large leaves
+  c.fillStyle=EGA.LTGREEN;
+  c.fillRect(0,30,40,20);c.fillRect(60,25,35,18);c.fillRect(270,35,50,20);
+  c.fillStyle=EGA.GREEN;
+  c.fillRect(10,40,25,25);c.fillRect(280,45,30,20);
+  // Tree trunks
+  c.fillStyle=EGA.BROWN;
+  c.fillRect(10,50,8,150);c.fillRect(70,40,6,160);c.fillRect(290,30,8,170);
+  c.fillRect(15,90,4,4);c.fillRect(66,80,4,4);// knots
+  // Stone path on ground
+  c.fillStyle=EGA.DKGRAY;c.fillRect(100,160,120,40);
+  c.fillStyle=EGA.LTGRAY;
+  for(let x=105;x<215;x+=12){c.fillRect(x,162,10,8);c.fillRect(x+6,172,10,8);c.fillRect(x,182,10,8);}
+  // Ground foliage
+  c.fillStyle=EGA.GREEN;c.fillRect(0,170,100,30);c.fillRect(220,165,100,35);
+  c.fillStyle=EGA.LTGREEN;c.fillRect(80,175,30,10);c.fillRect(220,170,20,8);
+  // Parrot on branch
+  c.fillStyle=EGA.BROWN;c.fillRect(130,60,60,4);// branch
+  c.fillStyle=EGA.BROWN;c.fillRect(128,40,4,24);// trunk bit
+  // Parrot body
+  c.fillStyle=EGA.RED;c.fillRect(164,48,10,12);
+  c.fillStyle=EGA.LTRED;c.fillRect(166,50,6,8);
+  // Parrot head
+  c.fillStyle=EGA.RED;c.fillRect(172,44,8,10);
+  c.fillStyle=EGA.WHITE;c.fillRect(176,46,3,3);// eye area
+  c.fillStyle=EGA.BLACK;c.fillRect(177,47,1,1);// eye
+  c.fillStyle=EGA.YELLOW;c.fillRect(180,48,4,3);// beak
+  // Wing
+  c.fillStyle=EGA.BLUE;c.fillRect(164,50,6,6);
+  c.fillStyle=EGA.LTBLUE;c.fillRect(165,52,4,3);
+  // Tail
+  c.fillStyle=EGA.GREEN;c.fillRect(158,52,6,12);c.fillStyle=EGA.LTGREEN;c.fillRect(160,54,3,8);
+  // Feet
+  c.fillStyle=EGA.BROWN;c.fillRect(170,58,2,4);c.fillRect(174,58,2,4);
+  // Exotic fruit on branch (if not taken)
+  if(!st.inventory.includes('exotic_fruit')){
+    c.fillStyle=EGA.BROWN;c.fillRect(225,75,30,3);// branch
+    c.fillStyle=EGA.RED;c.fillRect(238,68,8,8);
+    c.fillStyle=EGA.LTRED;c.fillRect(240,70,4,4);
+    c.fillStyle=EGA.GREEN;c.fillRect(240,66,4,3);// leaf on fruit
+  }
+  // Temple hint in background (east)
+  c.fillStyle=EGA.DKGRAY;c.fillRect(300,90,20,70);
+  c.fillStyle=EGA.LTGRAY;c.fillRect(302,85,16,8);c.fillRect(306,80,8,6);
+  // Flowers
+  c.fillStyle=EGA.LTMAGENTA;c.fillRect(30,165,4,4);c.fillRect(250,160,3,3);
+  c.fillStyle=EGA.YELLOW;c.fillRect(90,168,3,3);
+}
+
+// ── TEMPLE EXTERIOR ────────────────────────────────────────────
+function drawTempleExterior(c,w,h,st){
+  drawSky(c,0,40,[EGA.LTBLUE,EGA.LTCYAN]);
+  // Jungle frame
+  c.fillStyle=EGA.GREEN;c.fillRect(0,30,60,170);c.fillRect(280,30,40,170);
+  c.fillStyle=EGA.LTGREEN;c.fillRect(0,25,40,20);c.fillRect(290,20,30,25);
+  c.fillStyle=EGA.BROWN;c.fillRect(20,50,6,150);c.fillRect(300,40,6,160);
+  // Temple facade
+  c.fillStyle=EGA.LTGRAY;c.fillRect(70,40,180,160);
+  // Stone block pattern
+  c.fillStyle=EGA.DKGRAY;
+  for(let y=45;y<195;y+=12){for(let x=75;x<245;x+=16){c.fillRect(x,y,14,10);}}
+  // Temple top
+  c.fillStyle=EGA.LTGRAY;c.fillRect(80,35,160,10);c.fillRect(100,28,120,10);c.fillRect(120,22,80,8);c.fillRect(140,17,40,7);
+  // Columns
+  c.fillStyle=EGA.WHITE;c.fillRect(85,45,12,150);c.fillRect(225,45,12,150);
+  c.fillStyle=EGA.LTGRAY;c.fillRect(87,47,8,4);c.fillRect(87,140,8,4);c.fillRect(227,47,8,4);c.fillRect(227,140,8,4);
+  // Steps
+  c.fillStyle=EGA.LTGRAY;c.fillRect(80,190,160,10);c.fillRect(75,195,170,5);
+  // Door
+  if(st.flags.temple_open){
+    c.fillStyle=EGA.BLACK;c.fillRect(130,80,60,115);
+    c.fillStyle=EGA.DKGRAY;c.fillRect(128,78,64,4);c.fillRect(128,78,4,119);c.fillRect(188,78,4,119);
+  } else {
+    c.fillStyle=EGA.BROWN;c.fillRect(130,80,60,115);
+    c.fillStyle=EGA.YELLOW;c.fillRect(132,82,56,4);c.fillRect(132,190,56,4);
+    c.fillStyle=EGA.DKGRAY;c.fillRect(158,82,4,113);// door split
+    // Door details
+    c.fillStyle=EGA.YELLOW;c.fillRect(140,120,10,10);c.fillRect(170,120,10,10);// decorative squares
+    c.fillStyle=EGA.BROWN;c.fillRect(142,122,6,6);c.fillRect(172,122,6,6);
+  }
+  // Carved symbols (glowing)
+  c.fillStyle=EGA.CYAN;
+  c.fillRect(105,60,8,8);c.fillRect(115,55,4,4);c.fillRect(207,60,8,8);c.fillRect(195,55,4,4);
+  c.fillRect(105,100,6,6);c.fillRect(207,100,6,6);
+  c.fillRect(108,150,4,4);c.fillRect(210,150,4,4);
+  // Inscription area above door
+  c.fillStyle=EGA.DKGRAY;c.fillRect(120,65,80,12);
+  c.fillStyle=EGA.CYAN;// small glyphs suggesting text
+  for(let x=124;x<196;x+=6){c.fillRect(x,68,4,2);c.fillRect(x+1,71,3,2);}
+  // Moss
+  c.fillStyle=EGA.GREEN;c.fillRect(90,80,10,6);c.fillRect(230,100,8,5);c.fillRect(100,170,12,6);
+}
+
+// ── TEMPLE INTERIOR ────────────────────────────────────────────
+function drawTempleInterior(c,w,h,st){
+  // Dark stone interior
+  c.fillStyle=EGA.DKGRAY;c.fillRect(0,0,320,200);
+  // Walls
+  c.fillStyle=EGA.LTGRAY;
+  for(let y=0;y<200;y+=16){for(let x=0;x<320;x+=20){c.fillRect(x+1,y+1,18,14);}}
+  // Darken edges
+  c.fillStyle='rgba(0,0,0,0.3)';c.fillRect(0,0,40,200);c.fillRect(280,0,40,200);
+  // Light shafts from ceiling
+  c.fillStyle=EGA.YELLOW;
+  // Shaft 1
+  for(let i=0;i<80;i+=2){c.fillRect(80+i/3,i,4,2);}
+  // Shaft 2
+  for(let i=0;i<80;i+=2){c.fillRect(230-i/3,i,4,2);}
+  c.fillStyle=EGA.WHITE;
+  for(let i=0;i<60;i+=4){c.fillRect(82+i/3,i+10,2,2);c.fillRect(228-i/3,i+10,2,2);}
+  // Floor
+  c.fillStyle=EGA.DKGRAY;c.fillRect(0,170,320,30);
+  // Floor tile pattern
+  c.fillStyle=EGA.LTGRAY;
+  for(let x=10;x<310;x+=20){c.fillRect(x,172,18,8);c.fillRect(x+10,182,18,8);}
+  // Pedestal
+  c.fillStyle=EGA.LTGRAY;c.fillRect(140,140,40,30);c.fillRect(145,135,30,8);c.fillRect(148,130,24,8);
+  c.fillStyle=EGA.WHITE;c.fillRect(150,132,20,4);
+  // Crystal lens on pedestal (if not taken)
+  if(!st.inventory.includes('crystal_lens')){
+    c.fillStyle=EGA.LTCYAN;c.fillRect(154,118,12,14);
+    c.fillStyle=EGA.WHITE;c.fillRect(156,120,8,10);
+    c.fillStyle=EGA.CYAN;c.fillRect(158,122,4,6);
+    // Glow
+    c.fillStyle=EGA.LTCYAN;c.fillRect(150,116,2,2);c.fillRect(168,116,2,2);c.fillRect(152,130,2,2);c.fillRect(166,130,2,2);
+  }
+  // Murals on walls - left wall (lighthouse)
+  c.fillStyle=EGA.BLUE;c.fillRect(10,40,50,80);// background
+  c.fillStyle=EGA.LTGRAY;c.fillRect(25,50,10,50);// lighthouse
+  c.fillStyle=EGA.YELLOW;c.fillRect(27,48,6,6);// light
+  c.fillStyle=EGA.WHITE;c.fillRect(15,95,40,10);// waves
+  c.fillStyle=EGA.LTBLUE;c.fillRect(12,100,46,15);
+  // Right wall mural (people)
+  c.fillStyle=EGA.MAGENTA;c.fillRect(260,40,50,80);
+  c.fillStyle=EGA.YELLOW;c.fillRect(270,55,6,15);c.fillRect(280,50,6,18);c.fillRect(290,55,6,15);// people
+  c.fillStyle=EGA.WHITE;c.fillRect(272,50,2,4);c.fillRect(282,45,2,4);c.fillRect(292,50,2,4);// heads
+  c.fillStyle=EGA.CYAN;c.fillRect(265,75,40,4);// water
+  // Ceiling
+  c.fillStyle=EGA.DKGRAY;c.fillRect(0,0,320,8);
+  c.fillRect(50,0,4,200);c.fillRect(266,0,4,200);// pillars
+  c.fillStyle=EGA.LTGRAY;c.fillRect(48,0,8,10);c.fillRect(264,0,8,10);
+  // Exit indicator
+  c.fillStyle=EGA.BROWN;c.fillRect(148,190,24,10);c.fillStyle=EGA.BLACK;c.fillRect(150,192,20,8);
+}
+
+// ── CLIFF OVERLOOK ─────────────────────────────────────────────
+function drawCliffOverlook(c,w,h,st){
+  // Sunset sky
+  drawSky(c,0,80,[EGA.LTBLUE,EGA.LTCYAN,EGA.CYAN,EGA.YELLOW,EGA.BROWN]);
+  // Sun near horizon
+  c.fillStyle=EGA.YELLOW;c.fillRect(240,60,20,16);c.fillStyle=EGA.WHITE;c.fillRect(244,64,12,8);
+  // Ocean panorama
+  drawOcean(c,80,60);
+  // Lighthouse far below
+  c.fillStyle=EGA.LTGRAY;c.fillRect(180,118,6,16);c.fillStyle=EGA.WHITE;c.fillRect(181,119,4,14);
+  c.fillStyle=EGA.RED;c.fillRect(180,124,6,3);
+  c.fillStyle=EGA.YELLOW;c.fillRect(181,116,4,3);// lamp
+  c.fillStyle=EGA.DKGRAY;c.fillRect(174,132,18,8);// rocks below
+  // Cliff face drops
+  c.fillStyle=EGA.DKGRAY;c.fillRect(0,140,320,60);
+  c.fillStyle=EGA.BROWN;c.fillRect(0,135,320,8);
+  // Cliff top grass
+  c.fillStyle=EGA.GREEN;c.fillRect(0,130,320,8);
+  c.fillStyle=EGA.LTGREEN;
+  for(let x=5;x<315;x+=12){c.fillRect(x,128,4,4);c.fillRect(x+6,130,3,3);}
+  // Iron ring
+  c.fillStyle=EGA.DKGRAY;c.fillRect(155,138,10,8);
+  c.fillStyle=EGA.BLACK;c.fillRect(157,140,6,4);
+  // Rope if tied
+  if(st.flags.rope_tied){
+    c.fillStyle=EGA.BROWN;
+    c.fillRect(159,146,2,54);
+    c.fillRect(157,148,6,2);
+    for(let y=150;y<195;y+=6){c.fillRect(158+(y%2),y,3,4);}
+  }
+  // Rocky cliff texture
+  c.fillStyle=EGA.LTGRAY;
+  c.fillRect(10,145,15,8);c.fillRect(50,150,12,6);c.fillRect(200,148,20,8);c.fillRect(280,142,15,10);
+  c.fillRect(100,155,18,6);c.fillRect(250,155,14,8);
+  // Wind-blown grass details
+  c.fillStyle=EGA.LTGREEN;
+  c.fillRect(30,128,6,2);c.fillRect(100,129,5,2);c.fillRect(220,127,7,2);c.fillRect(280,128,5,3);
+  // Clouds
+  drawCloud(c,50,10);drawCloud(c,150,18);
+  // Path north indicator
+  c.fillStyle=EGA.LTGRAY;c.fillRect(140,130,40,3);
+}
+
+
+// ── LIGHTHOUSE BASE ────────────────────────────────────────────
+function drawLighthouseBase(c,w,h,st){
+  drawSky(c,0,50,[EGA.LTBLUE,EGA.LTCYAN,EGA.CYAN]);
+  drawCloud(c,30,10);drawCloud(c,200,15);
+  // Ocean background
+  drawOcean(c,50,60);
+  // Rocky promontory
+  c.fillStyle=EGA.DKGRAY;c.fillRect(0,110,320,90);
+  c.fillStyle=EGA.LTGRAY;
+  c.fillRect(10,112,25,8);c.fillRect(60,115,20,6);c.fillRect(200,112,30,8);c.fillRect(280,114,25,7);
+  // Crashing waves
+  c.fillStyle=EGA.WHITE;
+  c.fillRect(0,106,30,6);c.fillRect(50,108,20,4);c.fillRect(250,105,40,7);c.fillRect(300,108,20,5);
+  c.fillStyle=EGA.LTCYAN;
+  c.fillRect(5,108,20,3);c.fillRect(255,107,30,4);
+  // Lighthouse tower
+  c.fillStyle=EGA.LTGRAY;c.fillRect(140,30,40,80);
+  c.fillStyle=EGA.WHITE;c.fillRect(142,32,36,76);
+  // Red stripe
+  c.fillStyle=EGA.RED;c.fillRect(140,55,40,10);
+  // Lamp housing at top
+  c.fillStyle=EGA.DKGRAY;c.fillRect(136,22,48,10);c.fillRect(138,18,44,6);
+  c.fillStyle=EGA.LTGRAY;c.fillRect(144,24,32,8);
+  if(st.flags.lighthouse_lit){
+    c.fillStyle=EGA.YELLOW;c.fillRect(146,26,28,4);
+    c.fillStyle=EGA.WHITE;c.fillRect(150,26,20,4);
+  } else {
+    c.fillStyle=EGA.DKGRAY;c.fillRect(146,26,28,4);
+  }
+  // Roof
+  c.fillStyle=EGA.RED;c.fillRect(145,14,30,6);c.fillRect(150,10,20,6);c.fillRect(155,7,10,5);
+  // Door
+  if(st.flags.lighthouse_unlocked){
+    c.fillStyle=EGA.BLACK;c.fillRect(150,90,20,20);
+    c.fillStyle=EGA.BROWN;c.fillRect(148,88,4,24);c.fillRect(168,88,4,24);
+  } else {
+    c.fillStyle=EGA.BROWN;c.fillRect(150,90,20,20);
+    c.fillStyle=EGA.DKGRAY;c.fillRect(156,100,4,4);// keyhole
+    c.fillStyle=EGA.YELLOW;c.fillRect(150,90,20,2);c.fillRect(150,108,20,2);
+  }
+  // Lighthouse base/foundation
+  c.fillStyle=EGA.DKGRAY;c.fillRect(135,108,50,8);c.fillRect(130,114,60,6);
+  // Rope from cliff (if tied)
+  if(st.flags.rope_tied){
+    c.fillStyle=EGA.BROWN;
+    c.fillRect(250,0,2,60);
+    for(let y=0;y<60;y+=6){c.fillRect(249+(y%2),y,3,4);}
+  }
+  // Path to cove (west)
+  c.fillStyle=EGA.LTGRAY;c.fillRect(0,140,60,6);c.fillRect(30,138,20,3);
+  // Path indicators
+  c.fillStyle=EGA.DKGRAY;c.fillRect(10,145,8,3);c.fillRect(40,143,6,3);
+  // Small rocks
+  c.fillStyle=EGA.DKGRAY;c.fillRect(90,130,8,5);c.fillRect(230,125,6,4);c.fillRect(100,150,10,4);
+}
+
+// ── HIDDEN COVE ────────────────────────────────────────────────
+function drawHiddenCove(c,w,h,st){
+  drawSky(c,0,60,[EGA.LTBLUE,EGA.LTCYAN,EGA.WHITE]);
+  drawCloud(c,120,10);drawCloud(c,250,18);
+  // Calm turquoise water
+  c.fillStyle=EGA.CYAN;c.fillRect(0,60,320,80);
+  c.fillStyle=EGA.LTCYAN;
+  for(let y=65;y<135;y+=6){for(let x=((y/6)%2)*15;x<320;x+=30){c.fillRect(x,y,12,3);}}
+  // Rocky walls framing
+  c.fillStyle=EGA.DKGRAY;c.fillRect(0,0,40,200);c.fillRect(290,0,30,200);
+  c.fillStyle=EGA.LTGRAY;c.fillRect(5,20,10,15);c.fillRect(15,60,12,10);c.fillRect(295,30,10,12);c.fillRect(300,80,8,10);
+  // More rock wall detail
+  c.fillStyle=EGA.BROWN;c.fillRect(30,100,15,60);c.fillRect(285,90,10,70);
+  // Pebble beach
+  c.fillStyle=EGA.LTGRAY;c.fillRect(40,140,250,60);
+  c.fillStyle=EGA.BROWN;
+  for(let x=45;x<285;x+=5){for(let y=142;y<195;y+=5){if((x*y)%7<3)c.fillRect(x,y,3,3);}}
+  c.fillStyle=EGA.DKGRAY;
+  for(let x=50;x<280;x+=8){for(let y=145;y<195;y+=7){if((x+y)%11<3)c.fillRect(x,y,2,2);}}
+  // Rowboat
+  c.fillStyle=EGA.BROWN;
+  c.fillRect(120,148,80,20);c.fillRect(115,152,90,14);c.fillRect(110,156,95,8);
+  // Boat interior
+  c.fillStyle=EGA.DKGRAY;c.fillRect(125,150,70,14);
+  // Hole in hull!
+  c.fillStyle=EGA.BLACK;c.fillRect(155,160,16,8);
+  c.fillStyle=EGA.BROWN;c.fillRect(153,158,2,2);c.fillRect(171,159,2,2);// jagged edges
+  // Boat details
+  c.fillStyle=EGA.YELLOW;c.fillRect(120,150,4,2);c.fillRect(195,152,4,2);// trim
+  // Bench in boat
+  c.fillStyle=EGA.BROWN;c.fillRect(140,153,30,2);
+  // Distant horizon
+  c.fillStyle=EGA.LTBLUE;c.fillRect(40,58,250,4);
+  // Path east
+  c.fillStyle=EGA.LTGRAY;c.fillRect(280,155,30,6);
+}
+
+// ── LIGHTHOUSE TOP ─────────────────────────────────────────────
+function drawLighthouseTop(c,w,h,st){
+  // Panoramic ocean view through windows
+  drawSky(c,0,40,[EGA.LTBLUE,EGA.LTCYAN]);
+  drawOcean(c,40,50);
+  // Window frame
+  c.fillStyle=EGA.DKGRAY;c.fillRect(0,0,320,6);c.fillRect(0,85,320,6);
+  c.fillRect(0,0,8,90);c.fillRect(312,0,8,90);
+  c.fillRect(80,0,4,90);c.fillRect(160,0,4,90);c.fillRect(236,0,4,90);
+  // Distant ship on horizon
+  c.fillStyle=EGA.BROWN;c.fillRect(270,38,12,6);
+  c.fillStyle=EGA.WHITE;c.fillRect(274,28,4,10);c.fillRect(273,30,6,2);// sail
+  // Interior floor
+  c.fillStyle=EGA.DKGRAY;c.fillRect(0,90,320,110);
+  c.fillStyle=EGA.BROWN;
+  for(let x=5;x<315;x+=15){c.fillRect(x,92,13,6);c.fillRect(x+7,100,13,6);}
+  // Brass mechanism (center)
+  c.fillStyle=EGA.YELLOW;c.fillRect(120,100,80,50);
+  c.fillStyle=EGA.BROWN;c.fillRect(122,102,76,46);
+  // Mechanism details
+  c.fillStyle=EGA.YELLOW;
+  c.fillRect(130,108,20,12);c.fillRect(170,108,20,12);// side panels
+  c.fillRect(140,125,40,8);// base plate
+  c.fillRect(125,148,70,4);// bottom trim
+  c.fillStyle=EGA.DKGRAY;
+  c.fillRect(135,110,10,8);c.fillRect(175,110,10,8);// details
+  // Lens socket
+  c.fillStyle=EGA.DKGRAY;c.fillRect(148,104,24,20);
+  if(st.flags.lens_placed){
+    c.fillStyle=EGA.LTCYAN;c.fillRect(150,106,20,16);
+    c.fillStyle=EGA.WHITE;c.fillRect(154,109,12,10);
+    c.fillStyle=EGA.CYAN;c.fillRect(157,112,6,4);
+  } else {
+    c.fillStyle=EGA.BLACK;c.fillRect(150,106,20,16);// empty socket
+  }
+  // Oil reservoir
+  c.fillStyle=EGA.DKGRAY;c.fillRect(230,110,50,40);
+  c.fillStyle=EGA.BROWN;c.fillRect(232,112,46,36);
+  c.fillStyle=EGA.DKGRAY;c.fillRect(235,108,40,4);// rim
+  if(st.flags.oil_poured){
+    c.fillStyle=EGA.YELLOW;c.fillRect(234,120,42,26);// oil
+    c.fillStyle=EGA.BROWN;c.fillRect(234,118,42,4);// oil surface
+  } else {
+    c.fillStyle=EGA.BLACK;c.fillRect(234,114,42,32);// empty
+  }
+  // Pipes connecting mechanism to reservoir
+  c.fillStyle=EGA.DKGRAY;c.fillRect(200,130,32,4);
+  // Brass railing
+  c.fillStyle=EGA.YELLOW;
+  c.fillRect(20,95,8,55);c.fillRect(30,95,4,2);c.fillRect(30,120,4,2);c.fillRect(30,145,4,2);
+  c.fillRect(292,95,8,55);c.fillRect(288,95,4,2);c.fillRect(288,120,4,2);c.fillRect(288,145,4,2);
+  // If lighthouse is lit - beam effect!
+  if(st.flags.lighthouse_lit){
+    c.fillStyle=EGA.WHITE;
+    c.fillRect(148,100,24,4);
+    c.fillRect(140,96,40,4);
+    c.fillStyle=EGA.YELLOW;
+    c.fillRect(130,92,60,4);
+    c.fillRect(120,88,80,4);
+    // Fill windows with light
+    c.fillStyle=EGA.YELLOW;
+    c.fillRect(10,8,68,76);c.fillRect(84,8,74,76);c.fillRect(164,8,70,76);c.fillRect(240,8,70,76);
+    c.fillStyle=EGA.WHITE;
+    c.fillRect(30,20,40,50);c.fillRect(100,20,50,50);c.fillRect(180,20,40,50);c.fillRect(256,20,40,50);
+  }
+  // Staircase entrance
+  c.fillStyle=EGA.BLACK;c.fillRect(40,160,30,40);
+  c.fillStyle=EGA.DKGRAY;c.fillRect(38,158,34,4);
+}
+
+// ── TITLE SCREEN ───────────────────────────────────────────────
+function drawTitleScreen(c,w,h){
+  c.fillStyle=EGA.BLACK;c.fillRect(0,0,320,200);
+  drawStars(c,80);
+  // Ocean at bottom
+  c.fillStyle=EGA.BLUE;c.fillRect(0,150,320,50);
+  c.fillStyle=EGA.LTBLUE;
+  for(let x=0;x<320;x+=16){c.fillRect(x,152,10,2);c.fillRect(x+8,158,10,2);c.fillRect(x,164,10,2);}
+  // Lighthouse silhouette
+  c.fillStyle=EGA.DKGRAY;
+  c.fillRect(150,60,20,90);c.fillRect(145,55,30,8);c.fillRect(155,50,10,8);
+  c.fillRect(140,145,40,8);
+  // Lighthouse beam
+  c.fillStyle=EGA.YELLOW;
+  c.fillRect(145,52,30,4);
+  c.fillRect(135,48,50,4);
+  c.fillStyle=EGA.WHITE;
+  c.fillRect(125,44,70,4);
+  c.fillRect(100,40,120,3);
+  // Sweeping beam right
+  c.fillStyle=EGA.YELLOW;
+  for(let i=0;i<60;i+=2){c.fillRect(175+i*2,54-i/3,4,2);}
+  c.fillStyle=EGA.WHITE;
+  for(let i=0;i<40;i+=2){c.fillRect(180+i*3,52-i/3,3,1);}
+  // Moon
+  c.fillStyle=EGA.WHITE;c.fillRect(60,30,14,14);c.fillStyle=EGA.LTGRAY;c.fillRect(62,32,10,10);
+  c.fillStyle=EGA.BLACK;c.fillRect(68,28,10,14);// crescent
+  // Title text area
+  c.fillStyle=EGA.YELLOW;
+  // T
+  c.fillRect(30,90,18,3);c.fillRect(37,90,4,16);
+  // H
+  c.fillRect(52,90,4,16);c.fillRect(62,90,4,16);c.fillRect(52,97,14,3);
+  // E
+  c.fillRect(70,90,4,16);c.fillRect(70,90,12,3);c.fillRect(70,97,10,3);c.fillRect(70,103,12,3);
+  c.fillStyle=EGA.WHITE;
+  // Subtitle
+  c.font='8px monospace';
+  // Draw "LIGHTHOUSE OF MERIDIA" with pixels
+  c.fillStyle=EGA.LTCYAN;
+  c.fillRect(50,115,220,3);// decorative line
+  c.fillStyle=EGA.WHITE;
+  c.fillRect(55,113,2,7);c.fillRect(265,113,2,7);// end caps
+  // "Press ENTER" text approximation
+  c.fillStyle=EGA.LTGRAY;
+  c.fillRect(90,175,140,3);// line
+  c.fillStyle=EGA.WHITE;
+  c.fillRect(95,180,130,2);
+  // Rocks at lighthouse base
+  c.fillStyle=EGA.DKGRAY;c.fillRect(130,148,60,6);c.fillRect(125,150,70,4);
+}
+
+const SCENES = {
+  beach: drawBeach, coastal_path: drawCoastalPath, village: drawVillage,
+  cave: drawCave, jungle: drawJungle, temple_exterior: drawTempleExterior,
+  temple_interior: drawTempleInterior, cliff_overlook: drawCliffOverlook,
+  lighthouse_base: drawLighthouseBase, hidden_cove: drawHiddenCove,
+  lighthouse_top: drawLighthouseTop, title: drawTitleScreen
+};
+
+
+// ═══════════════════════════════════════════════════════════════════
+// GAME CONTENT: Rooms, Items, and Puzzle Logic
+// ═══════════════════════════════════════════════════════════════════
+
+const ROOMS = {
+  beach: {
+    name: "Shipwreck Beach",
+    exits: { north: 'coastal_path' },
+    getDescription: function(){
+      let d = "A white sandy beach littered with wreckage from your ship, The Cartographer's Dream. Broken timbers and torn sails scatter the shore. Foamy waves crash rhythmically against the sand.";
+      if(!state.inventory.includes('plank')) d += " A sturdy PLANK lies among the debris.";
+      if(!state.inventory.includes('rope')) d += " A length of ROPE is tangled in the broken mast.";
+      d += " A rocky coastal path leads NORTH.";
+      return d;
+    }
+  },
+  coastal_path: {
+    name: "Coastal Path",
+    exits: {
+      south: 'beach',
+      west: 'cave',
+      north: 'village',
+      east: { room: 'jungle', blocked: 'vines_cleared',
+        blockedMsg: "Dense jungle vines block the eastern path. You'd need something sharp to cut through them." }
+    },
+    getDescription: function(){
+      let d = "A rocky path winds along dramatic sea cliffs high above the crashing waves below.";
+      d += " A DARK CAVE opens in the cliff face to the WEST.";
+      if(!state.flags.vines_cleared) d += " Dense vines block the path EAST.";
+      else d += " A cleared path leads EAST into the jungle.";
+      d += " The path continues NORTH toward ancient ruins, and SOUTH back to the beach.";
+      return d;
+    }
+  },
+  village: {
+    name: "Abandoned Village",
+    exits: { south: 'coastal_path' },
+    getDescription: function(){
+      let d = "The crumbling remains of an ancient village. Stone huts with collapsed roofs line a mossy cobblestone path. An old WELL sits in the village square.";
+      if(!state.inventory.includes('machete')) d += " A MACHETE rests on a merchant's stall.";
+      if(!state.flags.hut_searched) d += " One of the huts still has an intact doorway - you could SEARCH it.";
+      if(!state.inventory.includes('bucket')) d += " An old BUCKET sits by the well.";
+      let wellState = "";
+      if(!state.flags.well_bridged) wellState = " The well opening is too wide to reach across safely.";
+      else if(!state.scored['get_key']) wellState = " Your plank bridges the well opening. You could try to retrieve something from the bottom.";
+      d += wellState;
+      d += " The path leads SOUTH.";
+      return d;
+    }
+  },
+  cave: {
+    name: "Seaside Cave",
+    exits: { east: 'coastal_path' },
+    getDescription: function(){
+      let d = "A damp cave carved into the sea cliffs. Near the entrance, dim light reveals rocky walls glistening with moisture. Stalactites hang from the ceiling like stone fangs.";
+      if(!state.inventory.includes('flint')) d += " A piece of FLINT and STEEL rests on a rock ledge near the entrance.";
+      if(!state.flags.lamp_lit) d += " Deeper in the cave, absolute darkness swallows everything. You'd need a light source to explore further.";
+      else {
+        d += " Your lamp illuminates the deeper cave, revealing ancient formations.";
+        if(!state.inventory.includes('oil_flask')) d += " A clay FLASK sits on a natural shelf.";
+        d += " An old JOURNAL lies on the ground.";
+      }
+      d += " The exit leads EAST.";
+      return d;
+    }
+  },
+  jungle: {
+    name: "Tropical Jungle",
+    exits: { west: 'coastal_path', east: 'temple_exterior' },
+    getDescription: function(){
+      let d = "Dense tropical jungle presses in from all sides. Vibrant green foliage, massive leaves, and twisting vines create a living cathedral. Shafts of golden light pierce the canopy above.";
+      d += " A bright-feathered PARROT watches you from a branch, tilting its head curiously.";
+      if(!state.inventory.includes('exotic_fruit')) d += " A colorful FRUIT hangs from a low branch.";
+      d += " A worn stone path leads EAST toward ancient architecture. The path back WEST leads to the coastal cliffs.";
+      return d;
+    }
+  },
+  temple_exterior: {
+    name: "Ancient Temple",
+    exits: {
+      west: 'jungle',
+      south: 'cliff_overlook',
+      north: { room: 'temple_interior', blocked: 'temple_open',
+        blockedMsg: "The massive stone door is sealed. Perhaps the inscription above holds the key..." }
+    },
+    getDescription: function(){
+      let d = "A magnificent stone temple rises from the jungle, covered in moss and carved with mysterious glowing symbols. Steps lead up to a massive stone door.";
+      if(!state.flags.temple_open){
+        d += " Above the door, an INSCRIPTION reads: \"I have cities but no houses, forests but no trees, and water but no fish. What am I?\"";
+      } else {
+        d += " The great stone door stands open, revealing a passage NORTH into the temple interior.";
+      }
+      d += " A path leads SOUTH to a cliff overlook, and WEST back through the jungle.";
+      return d;
+    }
+  },
+  temple_interior: {
+    name: "Temple Chamber",
+    exits: { south: 'temple_exterior' },
+    getDescription: function(){
+      let d = "A vast chamber lit by shafts of golden light streaming through cracks in the ceiling. Ancient murals cover the walls, depicting scenes of a lighthouse and a seafaring people. A stone PEDESTAL stands in the center of the room.";
+      if(!state.inventory.includes('crystal_lens')) d += " Atop the pedestal rests a brilliant CRYSTAL LENS, glowing with an ethereal inner light.";
+      else d += " The pedestal is empty.";
+      d += " The exit leads SOUTH.";
+      return d;
+    }
+  },
+  cliff_overlook: {
+    name: "Cliff Overlook",
+    exits: {
+      north: 'temple_exterior',
+      down: { room: 'lighthouse_base', blocked: 'rope_tied',
+        blockedMsg: "The cliff is too steep and dangerous to climb down without a rope. There's a sturdy iron RING bolted into the rock at the edge." }
+    },
+    getDescription: function(){
+      let d = "A windswept cliff with a breathtaking view of the island and the vast ocean. Far below, you can see a LIGHTHOUSE standing on a rocky promontory, its lamp dark and lifeless.";
+      d += " A sturdy iron RING is bolted into the rock at the cliff's edge.";
+      if(!state.flags.rope_tied) d += " The cliff is too steep to climb down without a rope.";
+      else d += " Your rope hangs securely from the ring. You can climb DOWN.";
+      d += " The temple lies to the NORTH.";
+      return d;
+    }
+  },
+  lighthouse_base: {
+    name: "Lighthouse Base",
+    exits: {
+      up: 'cliff_overlook',
+      west: 'hidden_cove',
+      enter: { room: 'lighthouse_top', blocked: 'lighthouse_unlocked',
+        blockedMsg: "The heavy wooden door is locked with a rusted iron lock. You'll need a key." },
+      north: { room: 'lighthouse_top', blocked: 'lighthouse_unlocked',
+        blockedMsg: "The heavy wooden door is locked with a rusted iron lock. You'll need a key." }
+    },
+    getDescription: function(){
+      let d = "The base of an ancient stone lighthouse. The tower stretches high above, its lamp dark and lifeless against the sky. Waves crash against the rocks below.";
+      if(!state.flags.lighthouse_unlocked) d += " A heavy wooden DOOR with a rusted iron LOCK bars entry.";
+      else d += " The door stands open. You can ENTER the lighthouse or go UP.";
+      d += " A narrow path leads WEST to a hidden cove. You can climb UP the rope to the cliff.";
+      return d;
+    }
+  },
+  hidden_cove: {
+    name: "Hidden Cove",
+    exits: { east: 'lighthouse_base' },
+    getDescription: function(){
+      return "A small, sheltered cove with calm turquoise water lapping gently at a pebble beach. An old ROWBOAT is pulled up on the shore, but it has a large hole in its hull. This could be your way off the island... if only someone could see you out here. The path leads EAST back to the lighthouse.";
+    }
+  },
+  lighthouse_top: {
+    name: "Lighthouse Top",
+    exits: { down: 'lighthouse_base' },
+    getDescription: function(){
+      let d = "The top of the lighthouse! A complex brass MECHANISM dominates the room, surrounded by panoramic windows revealing the ocean in every direction.";
+      if(!state.flags.lens_placed) d += " The mechanism has an empty SOCKET where a lens should go.";
+      else d += " The Crystal Lens gleams in its socket.";
+      if(!state.flags.oil_poured) d += " An oil RESERVOIR sits dry beside the mechanism.";
+      else d += " The oil reservoir is filled with golden sacred oil.";
+      d += " Wait... is that a SHIP on the distant horizon?";
+      d += " The staircase leads DOWN.";
+      return d;
+    }
+  }
+};
+
+
+// ═══════════════════════════════════════════════════════════════════
+// COMMAND HANDLER - All puzzle logic
+// ═══════════════════════════════════════════════════════════════════
+
+function matchNoun(noun, ...terms) {
+  if(!noun) return false;
+  return terms.some(t => noun.includes(t));
+}
+
+function handleRoomCommand(cmd) {
+  const room = state.currentRoom;
+  const v = cmd.verb, n = cmd.noun, n2 = cmd.noun2;
+
+  // ── UNIVERSAL ACTIONS ──
+  if(v==='eat' && matchNoun(n,'fruit')){
+    if(hasItem('exotic_fruit')){
+      addText("You bite into the exotic fruit. It tastes like a strange mix of mango, starfruit, and regret. Interesting, but not unpleasant.");
+      removeItem('exotic_fruit');
+      return true;
+    }
+  }
+  if(v==='read' && matchNoun(n,'journal')){
+    addText("The journal belonged to the last lighthouse keeper. It reads:",'narration');
+    addText('"The lighthouse needs three things to shine: the Crystal Lens of the Meridians, the Sacred Oil, and living flame. I hid the oil in the sea cave when the shadows came. If you are reading this, you are the island\'s last hope. Relight the beacon. Guide the lost ones home."','lore');
+    state.flags.journal_read = true;
+    return true;
+  }
+
+  // ── BEACH ──
+  if(room==='beach'){
+    if(v==='take' && matchNoun(n,'plank','wood','board','timber')){
+      if(hasItem('plank')){addText("You already have the plank.");return true;}
+      addText("You pull a sturdy wooden plank from the wreckage. It's about four feet long and still solid. Could be useful!");
+      addItem('plank'); addScore(5,'Found the plank'); redrawScene();
+      return true;
+    }
+    if(v==='take' && matchNoun(n,'rope')){
+      if(hasItem('rope')){addText("You already have the rope.");return true;}
+      addText("You carefully untangle a length of sturdy hemp rope from the broken mast. About thirty feet of good, strong rope.");
+      addItem('rope'); addScore(5,'Found the rope'); redrawScene();
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'ship','wreck','debris','hull')){
+      addText("The remains of your ship, The Cartographer's Dream. The hull is shattered beyond repair. Broken timbers, torn sailcloth, and scattered supplies litter the beach. It won't sail again.");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'ocean','sea','water','waves')){
+      addText("The vast ocean stretches endlessly to the horizon. Somewhere out there, shipping lanes carry vessels that could rescue you... if only they could see you.");
+      return true;
+    }
+    if(v==='swim'){
+      addText("You wade in up to your knees, but the undertow is terrifyingly strong. The currents would sweep you out to sea in seconds. Swimming is not an option.");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'sail')){
+      addText("A torn, waterlogged sail. Too damaged to be of any use.");return true;
+    }
+    return false;
+  }
+
+  // ── COASTAL PATH ──
+  if(room==='coastal_path'){
+    if((v==='use'||v==='cut') && matchNoun(n,'machete') && matchNoun(n2,'vine','vines','jungle','path','east')){
+      if(!hasItem('machete')){addText("You don't have a machete.");return true;}
+      if(state.flags.vines_cleared){addText("You've already cleared the vines.");return true;}
+      addText("You hack through the thick jungle vines with powerful swings of the machete! Vegetation falls away, revealing a worn stone path leading east into the jungle.");
+      state.flags.vines_cleared=true; addScore(5,'Cleared the jungle path'); redrawScene();
+      return true;
+    }
+    if(v==='cut' && matchNoun(n,'vine','vines')){
+      if(!hasItem('machete')){addText("You'd need something sharp to cut through these thick vines.");return true;}
+      if(state.flags.vines_cleared){addText("You've already cleared the vines.");return true;}
+      addText("You hack through the thick jungle vines with powerful swings of the machete! Vegetation falls away, revealing a worn stone path leading east into the jungle.");
+      state.flags.vines_cleared=true; addScore(5,'Cleared the jungle path'); redrawScene();
+      return true;
+    }
+    if(v==='use' && matchNoun(n,'machete') && !n2){
+      if(!hasItem('machete')){addText("You don't have a machete.");return true;}
+      if(!state.flags.vines_cleared){
+        addText("You hack through the thick jungle vines with powerful swings of the machete! Vegetation falls away, revealing a worn stone path leading east.");
+        state.flags.vines_cleared=true; addScore(5,'Cleared the jungle path'); redrawScene();
+      } else { addText("There's nothing here that needs cutting."); }
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'cave')){
+      addText("A dark cave mouth gapes open in the cliff face to the west. Cool, damp air wafts from within.");return true;
+    }
+    if(v==='look' && matchNoun(n,'vine','vines','jungle')){
+      if(!state.flags.vines_cleared) addText("Thick, ropy jungle vines completely block the eastern path. You'd need something sharp to cut through.");
+      else addText("Cut vines lie on the ground. The eastern path is clear.");
+      return true;
+    }
+    return false;
+  }
+
+  // ── VILLAGE ──
+  if(room==='village'){
+    if(v==='take' && matchNoun(n,'machete','blade')){
+      if(hasItem('machete')){addText("You already have the machete.");return true;}
+      addText("You grab the rusty but serviceable machete from the merchant's stall. The blade is still sharp enough to cut through vegetation.");
+      addItem('machete'); addScore(5,'Found the machete'); redrawScene();
+      return true;
+    }
+    if(v==='take' && matchNoun(n,'bucket','pail')){
+      if(hasItem('bucket')){addText("You already have the bucket.");return true;}
+      addText("You pick up the old wooden bucket. It's battered but still holds water. There's a rope handle attached.");
+      addItem('bucket'); addScore(5,'Found the bucket'); redrawScene();
+      return true;
+    }
+    if(v==='search' && matchNoun(n,'hut','house','building','doorway','inside')){
+      if(state.flags.hut_searched){addText("You've already searched the hut thoroughly. Nothing else to find.");return true;}
+      addText("You duck through the crumbling doorway and search the dusty interior. Behind a collapsed shelf, your hand closes around something metallic...");
+      addText("You found an old brass OIL LAMP! It still has some oil sloshing inside.",'success');
+      addItem('oil_lamp'); state.flags.hut_searched=true; addScore(5,'Found the oil lamp'); redrawScene();
+      return true;
+    }
+    if(v==='take' && matchNoun(n,'lamp','oil lamp','lantern')){
+      if(hasItem('oil_lamp')){addText("You already have the lamp.");return true;}
+      if(!state.flags.hut_searched){addText("You don't see a lamp out here. Maybe you should SEARCH the buildings.");return true;}
+      addText("You already picked up the lamp when you searched the hut.");return true;
+    }
+    if((v==='use'||v==='put'||v==='place') && matchNoun(n,'plank') && matchNoun(n2,'well')){
+      if(!hasItem('plank')){addText("You don't have a plank.");return true;}
+      if(state.flags.well_bridged){addText("The plank is already in place across the well.");return true;}
+      addText("You carefully lay the wooden plank across the crumbling well opening, creating a sturdy bridge. Now you can reach across to the other side!");
+      state.flags.well_bridged=true; addScore(5,'Bridged the well'); redrawScene();
+      return true;
+    }
+    if((v==='use'||v==='put') && matchNoun(n,'bucket') && matchNoun(n2,'well')){
+      if(!hasItem('bucket')){addText("You don't have a bucket.");return true;}
+      if(!state.flags.well_bridged){addText("The well opening is too wide. You can't reach across to lower the bucket safely. You need to bridge the gap first.");return true;}
+      addText("You lower the bucket deep into the dark well. It descends... descends... CLANK! It hits something metallic at the bottom.");
+      addText("You haul the bucket back up. Inside, covered in grime and rust, is an iron KEY!",'success');
+      addItem('rusty_key'); removeItem('bucket'); addScore(10,'Retrieved the key from the well');
+      return true;
+    }
+    if(v==='use' && matchNoun(n,'bucket') && !n2){
+      if(!hasItem('bucket')){addText("You don't have a bucket.");return true;}
+      addText("Try using the bucket ON something specific.");return true;
+    }
+    if(v==='look' && matchNoun(n,'well')){
+      if(!state.flags.well_bridged) addText("A deep stone well in the village square. The opening is quite wide - too far to reach across safely. Something glints faintly at the bottom.");
+      else if(!state.scored['get_key']) addText("Your plank bridges the well opening. You can now reach across. Something glints at the bottom... if only you could lower something down there.");
+      else addText("An old stone well. You already retrieved the key from the bottom.");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'stall','merchant','market','shop')){
+      let d = "A weathered merchant's stall, its wooden frame somehow still standing after all these years.";
+      if(!hasItem('machete')) d += " A rusty MACHETE lies on the counter.";
+      else d += " The counter is empty now.";
+      addText(d);return true;
+    }
+    return false;
+  }
+
+  // ── CAVE ──
+  if(room==='cave'){
+    if(v==='take' && matchNoun(n,'flint','steel')){
+      if(hasItem('flint')){addText("You already have the flint and steel.");return true;}
+      addText("You pocket the flint stone and steel striker from the rock ledge. Together, these could start a fire!");
+      addItem('flint'); addScore(5,'Found flint and steel'); redrawScene();
+      return true;
+    }
+    if((v==='use'||v==='light') && matchNoun(n,'flint') && matchNoun(n2,'lamp','lantern')){
+      if(!hasItem('flint')){addText("You don't have flint.");return true;}
+      if(!hasItem('oil_lamp')){addText("You don't have a lamp to light.");return true;}
+      if(state.flags.lamp_lit){addText("The lamp is already lit.");return true;}
+      addText("You strike the flint against the steel. Sparks fly! On the third try, the oil lamp sputters to life, casting a warm golden glow that pushes back the cave's darkness!");
+      addText("The deeper cave is now illuminated, revealing hidden alcoves...",'success');
+      state.flags.lamp_lit=true; addScore(5,'Lit the oil lamp'); redrawScene();
+      return true;
+    }
+    if(v==='light' && matchNoun(n,'lamp','lantern')){
+      if(!hasItem('oil_lamp')){addText("You don't have a lamp.");return true;}
+      if(!hasItem('flint')){addText("You need something to light it with. A flint perhaps?");return true;}
+      if(state.flags.lamp_lit){addText("The lamp is already lit.");return true;}
+      addText("You strike the flint against the steel. Sparks fly! The oil lamp sputters to life, casting a warm golden glow!");
+      addText("The deeper cave is now illuminated!",'success');
+      state.flags.lamp_lit=true; addScore(5,'Lit the oil lamp'); redrawScene();
+      return true;
+    }
+    if(v==='use' && matchNoun(n,'lamp') && !n2){
+      if(state.flags.lamp_lit){addText("The lamp is burning steadily, illuminating the cave.");return true;}
+      if(hasItem('oil_lamp')&&hasItem('flint')){
+        addText("You strike the flint against the steel. Sparks fly! The oil lamp sputters to life!");
+        state.flags.lamp_lit=true; addScore(5,'Lit the oil lamp'); redrawScene();
+        return true;
+      }
+      addText("The lamp needs to be lit first.");return true;
+    }
+    if(v==='take' && matchNoun(n,'flask','oil')){
+      if(!state.flags.lamp_lit){addText("It's too dark to see anything deeper in the cave.");return true;}
+      if(hasItem('oil_flask')){addText("You already have the oil flask.");return true;}
+      addText("You carefully lift the sealed clay flask from the natural shelf. The sacred oil inside sloshes gently. The flask is surprisingly warm to the touch.");
+      addItem('oil_flask'); addScore(10,'Found the sacred oil'); redrawScene();
+      return true;
+    }
+    if(v==='take' && matchNoun(n,'journal','book')){
+      if(!state.flags.lamp_lit){addText("It's too dark to see anything deeper in the cave.");return true;}
+      addText("You pick up the weathered journal and read it...");
+      addText('"The lighthouse needs three things: the Crystal Lens, the Sacred Oil, and living flame. I hid the oil here when the shadows came. Relight the beacon. Guide the lost ones home." - Final entry of Keeper Aldric','lore');
+      state.flags.journal_read=true;
+      return true;
+    }
+    if(v==='go' && (n==='north'||n==='west'||n==='deep'||n==='deeper'||n==='in'||n==='further')){
+      if(!state.flags.lamp_lit){addText("It's pitch black deeper in the cave. You'd need a light source before venturing further. You might break your neck on the uneven ground.");
+      } else { addText("You explore the deeper cave by lamplight. The walls are covered in ancient carvings. You can see a flask on a shelf and a journal on the ground."); }
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'wall','carving','carvings')){
+      if(state.flags.lamp_lit) addText("By lamplight, you can see ancient carvings on the cave walls - spiraling patterns and what appears to be a lighthouse surrounded by stars.");
+      else addText("The walls near the entrance glisten with moisture. Deeper in, you can't see anything.");
+      return true;
+    }
+    return false;
+  }
+
+
+  // ── JUNGLE ──
+  if(room==='jungle'){
+    if(v==='take' && matchNoun(n,'fruit')){
+      if(hasItem('exotic_fruit')){addText("You already have the fruit.");return true;}
+      addText("You pluck the colorful exotic fruit from the low-hanging branch. It's surprisingly heavy and smells like tropical sunshine.");
+      addItem('exotic_fruit'); redrawScene();
+      return true;
+    }
+    if(v==='talk' && matchNoun(n,'parrot','bird')){
+      addText("The parrot cocks its head, fixes you with a beady eye, and squawks:");
+      addText('"Maaap! SQUAWK! The answer is always a maaap! Cities without houses! Forests without trees! MAAAP!"','lore');
+      return true;
+    }
+    if(v==='pet' && matchNoun(n,'parrot','bird')){
+      addText("You gently reach toward the parrot. It tolerates your affection with dignified annoyance, allowing you to stroke its brilliant feathers for exactly three seconds before nibbling your finger in warning.");
+      return true;
+    }
+    if(v==='give' && matchNoun(n,'fruit') && matchNoun(n2,'parrot','bird')){
+      if(!hasItem('exotic_fruit')){addText("You don't have any fruit.");return true;}
+      addText("The parrot eagerly snatches the fruit from your hand and devours it with enthusiastic squawks. Juice drips from its beak.");
+      addText('"SQUAWK! Good human! MAP MAP MAP! The answer to everything is MAP! SQUAWK!"','lore');
+      removeItem('exotic_fruit');
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'parrot','bird')){
+      addText("A magnificent parrot with brilliant red plumage, blue and yellow wings, and a long green tail. It seems remarkably intelligent, watching you with knowing eyes. It keeps muttering something about a map...");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'tree','jungle','canopy','leaves')){
+      addText("Towering tropical trees form a dense canopy overhead. Shafts of golden light pierce through gaps in the leaves. The air is thick with the scent of flowers and damp earth.");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'path','stone')){
+      addText("A worn stone path, laid by ancient hands, leads east toward what appears to be a temple through the trees.");
+      return true;
+    }
+    return false;
+  }
+
+  // ── TEMPLE EXTERIOR ──
+  if(room==='temple_exterior'){
+    if((v==='answer'||v==='say') && matchNoun(n,'map')){
+      if(state.flags.temple_open){addText("The door is already open.");return true;}
+      addText("You speak the word aloud, your voice echoing off the ancient stone: \"A MAP!\"");
+      addText("");
+      addText("The ground trembles beneath your feet. Deep within the walls, ancient gears grind and stone scrapes against stone. Dust cascades from the carved symbols as they flare bright cyan.");
+      addText("");
+      addText("The massive stone door slowly, majestically swings inward, revealing the darkness of the temple chamber beyond!",'success');
+      state.flags.temple_open=true; addScore(10,'Solved the temple riddle'); redrawScene();
+      playBeep(220,100);setTimeout(()=>playBeep(330,100),200);setTimeout(()=>playBeep(440,200),400);
+      return true;
+    }
+    if(v==='answer'||v==='say'){
+      addText("The temple remains utterly silent. The carved symbols flicker briefly, then dim. That is not the answer.");
+      playError();
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'door')){
+      if(state.flags.temple_open) addText("The massive stone door stands wide open, revealing the temple interior beyond.");
+      else addText("A massive stone door, covered in intricate carvings. It has no handle, no keyhole. The inscription above must be the key to opening it.");
+      return true;
+    }
+    if((v==='look'||v==='read') && matchNoun(n,'inscription','riddle','writing','text','symbol')){
+      addText("The inscription carved above the door reads:",'narration');
+      addText('"I have cities but no houses, forests but no trees, and water but no fish. What am I?"','lore');
+      addText("(You can ANSWER the riddle by typing ANSWER followed by your guess.)",'system');
+      return true;
+    }
+    if(v==='open' && matchNoun(n,'door')){
+      if(state.flags.temple_open){addText("The door is already open.");return true;}
+      addText("The door has no handle and won't budge. It seems sealed by ancient magic. Perhaps the inscription holds the key...");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'symbol','symbols','carving','carvings','glyph')){
+      addText("Strange symbols are carved into the temple walls, faintly glowing cyan. They depict waves, stars, a lighthouse, and what appears to be a map of the island.");
+      return true;
+    }
+    return false;
+  }
+
+  // ── TEMPLE INTERIOR ──
+  if(room==='temple_interior'){
+    if(v==='take' && matchNoun(n,'lens','crystal')){
+      if(hasItem('crystal_lens')){addText("You already have the Crystal Lens.");return true;}
+      addText("You carefully lift the Crystal Lens from the ancient pedestal. It's surprisingly light, and warm to the touch. As you hold it up, it refracts the light shafts into dancing rainbows across the chamber walls.");
+      addText("This must be the key to the lighthouse!",'success');
+      addItem('crystal_lens'); addScore(10,'Found the Crystal Lens'); redrawScene();
+      return true;
+    }
+    if((v==='look'||v==='read') && matchNoun(n,'mural','murals','wall','painting','paintings')){
+      addText("The murals tell an epic story across the chamber walls:",'narration');
+      addText("The Meridians were an ancient seafaring people who built this island's lighthouse to guide lost ships to safety. Its beam could reach across impossible distances, powered by a Crystal Lens and Sacred Oil.",'lore');
+      addText("When a great darkness threatened the island, the last keeper hid the oil and the lens to prevent the shadows from corrupting them. The murals show three elements needed to restore the light: the Crystal Lens, Sacred Oil, and living flame.",'lore');
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'pedestal')){
+      if(!hasItem('crystal_lens')) addText("A beautifully carved stone pedestal stands in the center of the chamber. Atop it rests a Crystal Lens that seems to glow with an inner fire.");
+      else addText("The empty stone pedestal. Intricate carvings spiral around its surface - waves and stars and lighthouse beams.");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'light','shaft','ceiling')){
+      addText("Shafts of golden light stream through cracks in the ancient ceiling, illuminating dust motes that dance like tiny stars. The effect is magical.");
+      return true;
+    }
+    return false;
+  }
+
+  // ── CLIFF OVERLOOK ──
+  if(room==='cliff_overlook'){
+    if((v==='tie'||v==='use'||v==='attach') && matchNoun(n,'rope') && (matchNoun(n2,'ring','iron','cliff','edge')||!n2)){
+      if(!hasItem('rope')){addText("You don't have a rope.");return true;}
+      if(state.flags.rope_tied){addText("The rope is already securely tied to the ring.");return true;}
+      addText("You thread the rope through the iron ring and tie it with a secure sailor's knot - years of seafaring have their advantages! You lower the free end over the cliff edge. It reaches all the way down to the rocks below.");
+      addText("You can now climb DOWN to the lighthouse!",'success');
+      state.flags.rope_tied=true; removeItem('rope'); addScore(5,'Secured the rope'); redrawScene();
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'lighthouse','tower','light')){
+      addText("Far below, the lighthouse stands on a rocky promontory jutting into the sea. Its stone tower is weathered but intact. The lamp at the top is dark. If you could get down there and relight it, passing ships might see you!");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'ring','iron')){
+      addText("A sturdy iron ring, bolted deep into the rock. It's old but solid - meant for securing ropes. A few of these must have been placed by the Meridians.");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'ocean','sea','view','horizon')){
+      addText("The view is breathtaking. The ocean stretches to the horizon in every direction, deep blue fading to hazy white at the edge of the world. You can see the entire island from here - the beach where you washed ashore, the jungle canopy, and the lighthouse below.");
+      return true;
+    }
+    if(v==='climb' && matchNoun(n,'down','cliff','rope')){
+      if(!state.flags.rope_tied){addText("The cliff is too steep and dangerous to climb without a rope!");playError();return true;}
+      moveToRoom('lighthouse_base');return true;
+    }
+    return false;
+  }
+
+  // ── LIGHTHOUSE BASE ──
+  if(room==='lighthouse_base'){
+    if((v==='use'||v==='unlock') && matchNoun(n,'key') && (matchNoun(n2,'door','lock','lighthouse')||!n2)){
+      if(!hasItem('rusty_key')){addText("You don't have a key.");return true;}
+      if(state.flags.lighthouse_unlocked){addText("The door is already unlocked.");return true;}
+      addText("You insert the rusty iron key into the lock. For a heart-stopping moment, nothing happens. Then, with a grinding screech of ancient metal, the key turns!");
+      addText("The heavy wooden door creaks open, revealing a spiral stone staircase winding up into the lighthouse tower!",'success');
+      state.flags.lighthouse_unlocked=true; addScore(5,'Unlocked the lighthouse'); redrawScene();
+      return true;
+    }
+    if(v==='open' && matchNoun(n,'door')){
+      if(state.flags.lighthouse_unlocked){addText("The door is already open. You can ENTER the lighthouse.");return true;}
+      addText("The door is locked with a heavy iron lock. You'll need a key.");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'door','lock')){
+      if(state.flags.lighthouse_unlocked) addText("The heavy wooden door stands open, revealing a spiral staircase within.");
+      else addText("A heavy wooden door reinforced with iron bands. A large, rusted lock secures it. The keyhole is partially clogged with salt and grime, but a key might still work.");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'lighthouse','tower')){
+      addText("The lighthouse tower rises high above you, built from fitted stone blocks that have withstood centuries of storms. A red stripe circles the middle section. At the very top, the dark lamp housing waits to be relit.");
+      return true;
+    }
+    if(v==='climb' && matchNoun(n,'up','rope','cliff')){
+      moveToRoom('cliff_overlook');return true;
+    }
+    return false;
+  }
+
+  // ── HIDDEN COVE ──
+  if(room==='hidden_cove'){
+    if(v==='look' && matchNoun(n,'boat','rowboat','hull')){
+      addText("An old wooden rowboat, sun-bleached and barnacle-encrusted. It might have been seaworthy once, but a large hole in the hull makes it useless for sailing. Still, if someone knew you were here...");
+      return true;
+    }
+    if(v==='take' && matchNoun(n,'boat','rowboat')){
+      addText("The rowboat is far too heavy to carry, and it has a massive hole in the hull anyway. You'd need another way off the island.");
+      return true;
+    }
+    if(v==='use' && matchNoun(n,'plank') && matchNoun(n2,'boat','hull','rowboat')){
+      addText("The plank isn't big enough to patch a hole that size, and you'd need tools and tar besides. You need a different plan for rescue.");
+      return true;
+    }
+    if(v==='swim'){
+      addText("The cove water is calm, but beyond the rocky entrance, powerful currents swirl. Swimming out would be suicide. You need a signal, not a swim.");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'water','ocean','sea')){
+      addText("The turquoise water in the cove is remarkably clear and calm, sheltered by the surrounding rocks. Small fish dart through the shallows. Beyond the cove entrance, the open ocean churns.");
+      return true;
+    }
+    return false;
+  }
+
+  // ── LIGHTHOUSE TOP ──
+  if(room==='lighthouse_top'){
+    if((v==='use'||v==='put'||v==='place') && matchNoun(n,'lens','crystal') && (matchNoun(n2,'mechanism','socket','brass')||!n2)){
+      if(!hasItem('crystal_lens')){addText("You don't have the Crystal Lens.");return true;}
+      if(state.flags.lens_placed){addText("The lens is already in place.");return true;}
+      addText("You carefully place the Crystal Lens into the brass socket of the mechanism. It clicks into place with a satisfying resonance, as if the mechanism has been waiting centuries for this moment. The lens shimmers with inner light.");
+      state.flags.lens_placed=true; removeItem('crystal_lens'); addScore(5,'Placed the Crystal Lens'); redrawScene();
+      return true;
+    }
+    if((v==='use'||v==='pour'||v==='put') && matchNoun(n,'oil','flask') && (matchNoun(n2,'reservoir','mechanism','tank')||!n2)){
+      if(!hasItem('oil_flask')){addText("You don't have the oil.");return true;}
+      if(!state.flags.lens_placed){addText("You should place the lens in the mechanism first. The oil channels connect through the lens housing.");return true;}
+      if(state.flags.oil_poured){addText("The reservoir is already full.");return true;}
+      addText("You break the seal on the clay flask and pour the sacred oil into the reservoir. The golden liquid flows through ancient channels in the mechanism, filling the reservoir to the brim. A faint warmth emanates from the brass.");
+      state.flags.oil_poured=true; removeItem('oil_flask'); addScore(5,'Filled the oil reservoir'); redrawScene();
+      return true;
+    }
+    if((v==='use'||v==='light') && matchNoun(n,'flint') && (matchNoun(n2,'mechanism','oil','reservoir','lamp','lighthouse','beacon')||!n2)){
+      if(!hasItem('flint')){addText("You don't have the flint and steel.");return true;}
+      if(!state.flags.lens_placed){addText("The mechanism isn't ready. You need to place the Crystal Lens first.");return true;}
+      if(!state.flags.oil_poured){addText("There's no fuel. The oil reservoir is empty. You need to pour oil into it first.");return true;}
+      if(state.flags.lighthouse_lit){addText("The lighthouse is already blazing with light!");return true;}
+      // VICTORY!!!
+      victorySequence();
+      return true;
+    }
+    if(v==='light' && matchNoun(n,'mechanism','lighthouse','beacon','lamp','light')){
+      if(!hasItem('flint')){addText("You need something to create a spark. Flint and steel, perhaps?");return true;}
+      if(!state.flags.lens_placed){addText("The mechanism isn't ready. The lens socket is empty.");return true;}
+      if(!state.flags.oil_poured){addText("The oil reservoir is dry. Without fuel, there can be no flame.");return true;}
+      victorySequence();return true;
+    }
+    if(v==='look' && matchNoun(n,'mechanism','brass','machine','device')){
+      let d = "An intricate brass mechanism, beautifully engineered by the ancient Meridians. It has a central socket for a lens, connected by channels to an oil reservoir.";
+      if(state.flags.lens_placed) d+=" The Crystal Lens gleams in its socket.";
+      else d+=" The lens socket is empty.";
+      addText(d);return true;
+    }
+    if(v==='look' && matchNoun(n,'socket')){
+      if(state.flags.lens_placed) addText("The Crystal Lens sits perfectly in the brass socket, glowing faintly.");
+      else addText("An empty brass socket, precisely shaped to hold a lens. Intricate channels radiate outward from it.");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'reservoir','tank','oil')){
+      if(state.flags.oil_poured) addText("The reservoir is filled with sacred golden oil, ready to fuel the lighthouse flame.");
+      else addText("An empty oil reservoir, connected to the main mechanism by brass channels. It's bone dry.");
+      return true;
+    }
+    if(v==='look' && matchNoun(n,'ship','horizon','ocean','sea','window','view')){
+      addText("Through the panoramic windows, you can see the vast ocean stretching to every horizon. And there - on the distant horizon to the east - a ship! Its tiny white sails are just barely visible. If you could signal it...");
+      return true;
+    }
+    return false;
+  }
+
+  return false;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+// VICTORY SEQUENCE
+// ═══════════════════════════════════════════════════════════════════
+
+function victorySequence(){
+  state.flags.lighthouse_lit = true;
+  addScore(10,'Lit the lighthouse');
+  redrawScene();
+  
+  const lines = [
+    {t:"You strike the flint against the steel over the oil reservoir...",c:'narration',d:0},
+    {t:"",c:'',d:800},
+    {t:"A spark catches. A small flame dances to life on the sacred oil.",c:'narration',d:1600},
+    {t:"",c:'',d:2400},
+    {t:"The Crystal Lens focuses the flame into a brilliant beam of pure white light that ERUPTS from the lighthouse top!",c:'success',d:3200},
+    {t:"",c:'',d:4000},
+    {t:"The beam sweeps across the dark ocean like a blade of hope cutting through the void.",c:'narration',d:4800},
+    {t:"",c:'',d:5600},
+    {t:"On the horizon, the distant ship turns. It's seen the light!",c:'success',d:6400},
+    {t:"",c:'',d:7200},
+    {t:"You watch, heart pounding, as the ship grows larger, its sails catching the wind as it races toward Meridia.",c:'narration',d:8000},
+    {t:"",c:'',d:8800},
+    {t:"As the ship approaches, the lighthouse hums with ancient energy. The shadows that clung to the island melt away in the sacred light. The curse of Meridia is broken at last.",c:'narration',d:9600},
+    {t:"",c:'',d:10400},
+    {t:"Hours later, you stand on the deck of the rescue vessel, watching the lighthouse beam grow smaller behind you. Captain Elara Voss, cartographer, castaway, and now... Lighthouse Keeper of legend.",c:'narration',d:11200},
+    {t:"",c:'',d:12000},
+    {t:"The Lighthouse of Meridia shines once more, a beacon for all lost souls.",c:'lore',d:12800},
+    {t:"",c:'',d:13600},
+    {t:"\u2605 \u2605 \u2605  C O N G R A T U L A T I O N S  \u2605 \u2605 \u2605",c:'victory',d:14400},
+    {t:"Final Score: " + (state.score) + "/100 points in " + state.turns + " turns",c:'victory',d:15200},
+    {t:"",c:'',d:16000},
+    {t:"Thank you for playing THE LIGHTHOUSE OF MERIDIA",c:'victory',d:16800},
+    {t:"A Sierra Nevada Adventure \u00a9 2026",c:'system',d:17600}
+  ];
+
+  // Disable input during victory
+  document.getElementById('text-input').disabled = true;
+
+  lines.forEach(function(line){
+    setTimeout(function(){
+      addText(line.t, line.c);
+    }, line.d);
+  });
+
+  // Play victory fanfare
+  setTimeout(playVictoryFanfare, 14400);
+  
+  // Re-enable input after sequence
+  setTimeout(function(){
+    document.getElementById('text-input').disabled = false;
+    document.getElementById('text-input').placeholder = "The adventure is over. Refresh to play again!";
+  }, 18000);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// INITIALIZATION
+// ═══════════════════════════════════════════════════════════════════
+
+window.addEventListener('DOMContentLoaded', function(){
+  canvas = document.getElementById('game-canvas');
+  ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  outputEl = document.getElementById('text-output');
+  inputEl = document.getElementById('text-input');
+  roomNameEl = document.getElementById('room-name');
+
+  // Command history
+  let history = [], histIdx = -1;
+
+  inputEl.addEventListener('keydown', function(e){
+    if(e.key==='Enter'){
+      const val = inputEl.value.trim();
+      if(val){
+        history.push(val);
+        histIdx = history.length;
+        processCommand(val);
+      }
+      inputEl.value = '';
+      e.preventDefault();
+    } else if(e.key==='ArrowUp'){
+      if(history.length>0 && histIdx>0){histIdx--;inputEl.value=history[histIdx];}
+      e.preventDefault();
+    } else if(e.key==='ArrowDown'){
+      if(histIdx<history.length-1){histIdx++;inputEl.value=history[histIdx];}
+      else{histIdx=history.length;inputEl.value='';}
+      e.preventDefault();
+    }
+  });
+
+  // Show title screen first
+  drawTitleScreen(ctx, 320, 200);
+  roomNameEl.textContent = "THE LIGHTHOUSE OF MERIDIA";
+
+  addText("THE LIGHTHOUSE OF MERIDIA",'victory');
+  addText("A Sierra-Style Adventure Game",'system');
+  addText("");
+  addText("You are Captain Elara Voss, cartographer aboard The Cartographer's Dream. A terrible storm has wrecked your ship on the shores of the legendary Lost Isle of Meridia.",'narration');
+  addText("");
+  addText("Legend says the Meridians built an enchanted lighthouse that could guide any lost soul home. But the light went dark centuries ago, and the Meridians vanished...",'lore');
+  addText("");
+  addText("Find a way to relight the lighthouse and signal for rescue!",'system');
+  addText("Type HELP for a list of commands.",'system');
+  addText("");
+
+  // Start in beach
+  moveToRoom('beach');
+  inputEl.focus();
+});
+
+</script>
+</body>
+</html>
