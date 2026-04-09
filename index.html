@@ -85,9 +85,19 @@ let canvas, ctx, outputEl, inputEl, roomNameEl;
 function addText(text, cls) {
   const p = document.createElement('p');
   if(cls) p.className = cls;
-  // Highlight CAPITALIZED interactive words in narration/default text
+  // Highlight CAPITALIZED interactive words in narration/default text (safe DOM approach)
   if((!cls || cls==='narration') && text && /\b[A-Z]{2,}\b/.test(text)){
-    p.innerHTML = text.replace(/\b([A-Z]{2,})\b/g,'<span style="color:#55FFFF">$1</span>');
+    const parts = text.split(/(\b[A-Z]{2,}\b)/g);
+    parts.forEach(part => {
+      if(/^[A-Z]{2,}$/.test(part)){
+        const span = document.createElement('span');
+        span.style.color = '#55FFFF';
+        span.textContent = part;
+        p.appendChild(span);
+      } else {
+        p.appendChild(document.createTextNode(part));
+      }
+    });
   } else {
     p.textContent = text;
   }
@@ -200,18 +210,16 @@ function drawCurrentScene() {
 
 function redrawScene() { drawCurrentScene(); }
 
-// Sierra-style death with restore prompt
+// Sierra-style death with automatic mercy rewind
 function sierraDeath(deathText, tip) {
   addText('','error');
   addText(deathText,'error');
   addText('','error');
-  addText('Oh dear, you have died.','error');
+  addText('Oh dear, you have died!','error');
   if(tip) addText(tip,'system');
   addText('','system');
-  addText('But fear not! Type RESTORE to load your last save, or RESTART to begin anew.','system');
+  addText('...But fate is kind. You snap back to reality, heart pounding, realizing you only imagined that terrible outcome. Perhaps try something else.','narration');
   playError();
-  // Auto-restore state (Sierra mercy mode - just rewind to before the action)
-  // The death is cosmetic -- the player isn't actually dead
 }
 
 function processCommand(raw) {
@@ -241,7 +249,7 @@ function processCommand(raw) {
     addText('MAP - View island map  |  RESTART - Start over','system');
     return;
   }
-  if(cmd.noun==='map'&&cmd.verb==='look'||cmd.verb==='map'){
+  if((cmd.noun==='map'&&cmd.verb==='look')||cmd.verb==='map'){
     addText('=== ISLE OF MERIDIA ===','system');
     addText('','system');
     addText('            [Temple Interior]','system');
@@ -304,6 +312,8 @@ function processCommand(raw) {
       state.currentRoom=s.currentRoom;state.inventory=s.inventory;state.score=s.score;
       state.turns=s.turns;state.scored=s.scored;state.flags=s.flags;
       updateInv();updateScore();
+      document.getElementById('text-input').disabled=false;
+      document.getElementById('text-input').placeholder='Type a command...';
       const room=ROOMS[state.currentRoom];
       if(room){roomNameEl.textContent=room.name;addText('Game loaded.','system');addText('');
         addText('\u2014 '+room.name+' \u2014','narration');addText(room.getDescription(),'narration');drawCurrentScene();}
