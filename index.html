@@ -7,11 +7,11 @@
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#000;color:#aaa;font-family:'Press Start 2P','Courier New',monospace;font-size:11px;line-height:1.6;display:flex;justify-content:center;align-items:center;min-height:100vh;overflow:hidden}
-#game-container{width:644px;border:2px solid #5555FF;background:#000;box-shadow:0 0 30px rgba(85,85,255,0.3)}
+body{background:#000;color:#aaa;font-family:'Press Start 2P','Courier New',monospace;font-size:11px;line-height:1.6;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;overflow-y:auto;overflow-x:hidden;padding:10px 0}
+#game-container{width:644px;max-width:100%;border:2px solid #5555FF;background:#000;box-shadow:0 0 30px rgba(85,85,255,0.3)}
 #title-bar{background:#0000AA;color:#FFFF55;padding:4px 8px;font-size:9px;display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #5555FF}
-#scene-wrapper{position:relative;width:640px;height:400px;border-bottom:2px solid #5555FF;overflow:hidden}
-#game-canvas{width:640px;height:400px;image-rendering:pixelated;image-rendering:-moz-crisp-edges;image-rendering:crisp-edges;display:block}
+#scene-wrapper{position:relative;width:100%;aspect-ratio:640/400;border-bottom:2px solid #5555FF;overflow:hidden}
+#game-canvas{width:100%;height:100%;image-rendering:pixelated;image-rendering:-moz-crisp-edges;image-rendering:crisp-edges;display:block}
 #room-name{position:absolute;top:4px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.7);color:#55FFFF;padding:2px 10px;font-size:9px;letter-spacing:1px;border:1px solid #00AAAA;font-family:'Press Start 2P','Courier New',monospace}
 #inventory-bar{background:#0000AA;border-bottom:2px solid #5555FF;padding:4px 8px;min-height:24px;display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:8px;color:#55FF55}
 #text-output{height:160px;overflow-y:auto;padding:8px;background:#000;border-bottom:2px solid #5555FF;font-size:10px}
@@ -20,7 +20,7 @@ body{background:#000;color:#aaa;font-family:'Press Start 2P','Courier New',monos
 #text-output::-webkit-scrollbar-thumb{background:#555;border:1px solid #0000AA}
 #text-output p{margin-bottom:6px;word-wrap:break-word}
 .narration{color:#AAAAAA} .system{color:#55FFFF} .error{color:#FF5555} .success{color:#55FF55}
-.input-echo{color:#FFFF55} .score-msg{color:#FF55FF} .victory{color:#FFFF55;text-align:center} .lore{color:#AA00AA}
+.input-echo{color:#FFFF55} .score-msg{color:#FF55FF} .victory{color:#FFFF55;text-align:center} .lore{color:#FF55FF}
 #input-area{display:flex;align-items:center;padding:6px 8px;background:#000055}
 #input-prompt{color:#55FF55;margin-right:6px;font-size:11px}
 #text-input{flex:1;background:transparent;border:none;color:#FFF;font-family:'Press Start 2P','Courier New',monospace;font-size:11px;outline:none;caret-color:#55FF55}
@@ -31,14 +31,14 @@ body{background:#000;color:#aaa;font-family:'Press Start 2P','Courier New',monos
 <div id="game-container">
 <div id="title-bar">
 <span class="game-title">THE LIGHTHOUSE OF MERIDIA</span>
-<span id="score-display">Score: 0/100 | Turns: 0</span>
+<span id="score-display" role="status" aria-label="Score display">Score: 0/100 | Turns: 0</span>
 </div>
 <div id="scene-wrapper">
-<canvas id="game-canvas" width="320" height="200"></canvas>
+<canvas id="game-canvas" width="320" height="200" role="img" aria-label="Game scene illustration"></canvas>
 <div id="room-name"></div>
 </div>
 <div id="inventory-bar">Inventory: (empty)</div>
-<div id="text-output"></div>
+<div id="text-output" role="log" aria-live="polite" aria-label="Game text output"></div>
 <div id="input-area">
 <span id="input-prompt">&gt;</span>
 <input type="text" id="text-input" placeholder="Type a command..." autocomplete="off" autofocus>
@@ -64,20 +64,20 @@ const VERB_SYNONYMS = {
   open:['open'],read:['read'],tie:['tie','attach'],light:['light','ignite'],
   pour:['pour','fill'],unlock:['unlock'],search:['search','look in','check'],
   answer:['answer','say','type'],push:['push'],pull:['pull'],eat:['eat','taste'],
-  swim:['swim'],climb:['climb'],save:['save'],drop:['drop'],cut:['cut','chop','hack'],
-  give:['give','feed'],pet:['pet','touch','stroke']
+  swim:['swim'],climb:['climb'],save:['save'],load:['load','restore'],restart:['restart'],drop:['drop'],cut:['cut','chop','hack'],
+  give:['give','feed'],pet:['pet','touch','stroke'],jump:['jump','leap']
 };
 const VERB_LOOKUP = {};
 Object.keys(VERB_SYNONYMS).forEach(c => VERB_SYNONYMS[c].forEach(w => VERB_LOOKUP[w]=c));
 const DIR_MAP = {n:'north',s:'south',e:'east',w:'west',u:'up',d:'down',
   north:'north',south:'south',east:'east',west:'west',up:'up',down:'down',enter:'enter',in:'enter'};
-const PREPS = ['on','to','in','with','at','from','into'];
+const PREPS = ['on','to','in','with','at','from','into','across','over'];
 
 const state = {
   currentRoom: null, inventory: [], score: 0, turns: 0, scored: {},
   flags: {vines_cleared:false,lamp_lit:false,well_bridged:false,temple_open:false,
     rope_tied:false,lighthouse_unlocked:false,lens_placed:false,oil_poured:false,
-    lighthouse_lit:false,hut_searched:false,journal_read:false}
+    lighthouse_lit:false,hut_searched:false,journal_read:false,parrot_fed:false}
 };
 
 let canvas, ctx, outputEl, inputEl, roomNameEl;
@@ -85,7 +85,12 @@ let canvas, ctx, outputEl, inputEl, roomNameEl;
 function addText(text, cls) {
   const p = document.createElement('p');
   if(cls) p.className = cls;
-  p.textContent = text;
+  // Highlight CAPITALIZED interactive words in narration/default text
+  if((!cls || cls==='narration') && text && /\b[A-Z]{2,}\b/.test(text)){
+    p.innerHTML = text.replace(/\b([A-Z]{2,})\b/g,'<span style="color:#55FFFF">$1</span>');
+  } else {
+    p.textContent = text;
+  }
   outputEl.appendChild(p);
   outputEl.scrollTop = outputEl.scrollHeight;
 }
@@ -126,6 +131,20 @@ function playBeep(f,d){try{const ac=getAC(),o=ac.createOscillator(),g=ac.createG
 function playSuccess(){try{const ac=getAC();[440,554,659,880].forEach((f,i)=>{const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=f;g.gain.value=0.06;g.gain.setValueAtTime(0.06,ac.currentTime+i*0.12);g.gain.exponentialRampToValueAtTime(0.001,ac.currentTime+i*0.12+0.15);o.connect(g);g.connect(ac.destination);o.start(ac.currentTime+i*0.12);o.stop(ac.currentTime+i*0.12+0.15);});}catch(e){}}
 function playError(){try{const ac=getAC();[330,220].forEach((f,i)=>{const o=ac.createOscillator(),g=ac.createGain();o.type='sawtooth';o.frequency.value=f;g.gain.value=0.04;o.connect(g);g.connect(ac.destination);o.start(ac.currentTime+i*0.15);o.stop(ac.currentTime+i*0.15+0.2);});}catch(e){}}
 function playPickup(){try{const ac=getAC(),o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.setValueAtTime(660,ac.currentTime);o.frequency.exponentialRampToValueAtTime(1320,ac.currentTime+0.08);g.gain.value=0.06;o.connect(g);g.connect(ac.destination);o.start(ac.currentTime);o.stop(ac.currentTime+0.12);}catch(e){}}
+// Ambient ocean sound (subtle noise + low oscillator)
+let ambientStarted=false;
+function startAmbient(){
+  if(ambientStarted)return;ambientStarted=true;
+  try{
+    const ac=getAC();
+    // Brown noise for ocean rumble
+    const bufSize=2*ac.sampleRate,buf=ac.createBuffer(1,bufSize,ac.sampleRate),data=buf.getChannelData(0);
+    let last=0;for(let i=0;i<bufSize;i++){const white=Math.random()*2-1;last=(last+(0.02*white))/1.02;data[i]=last*3.5;}
+    const src=ac.createBufferSource(),g=ac.createGain();
+    src.buffer=buf;src.loop=true;g.gain.value=0.03;
+    src.connect(g);g.connect(ac.destination);src.start();
+  }catch(e){}
+}
 function playVictoryFanfare(){try{const ac=getAC();[523,659,784,1047,784,1047,1319].forEach((f,i)=>{const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=f;g.gain.value=0.07;g.gain.setValueAtTime(0.07,ac.currentTime+i*0.2);g.gain.exponentialRampToValueAtTime(0.001,ac.currentTime+i*0.2+0.25);o.connect(g);g.connect(ac.destination);o.start(ac.currentTime+i*0.2);o.stop(ac.currentTime+i*0.2+0.25);});}catch(e){}}
 
 function parseInput(raw) {
@@ -134,11 +153,14 @@ function parseInput(raw) {
   if(input==='i'||input==='inventory') return {verb:'inventory',noun:null,prep:null,noun2:null};
   if(input==='help') return {verb:'help',noun:null,prep:null,noun2:null};
   if(DIR_MAP[input]) return {verb:'go',noun:DIR_MAP[input],prep:null,noun2:null};
-  // Handle direct riddle answer "map"
-  if(input==='map') return {verb:'answer',noun:'map',prep:null,noun2:null};
+  // Handle direct riddle answer "map" only at temple, otherwise show map
+  if(input==='map'){
+    if(state.currentRoom==='temple_exterior') return {verb:'answer',noun:'map',prep:null,noun2:null};
+    return {verb:'map',noun:null,prep:null,noun2:null};
+  }
   let tokens = input.split(/\s+/);
   if(tokens.length>=2&&tokens[0]==='pick'&&tokens[1]==='up'){tokens.splice(0,2,'take');}
-  if(tokens.length>=2&&tokens[0]==='look'&&tokens[1]==='in'){tokens.splice(0,2,'search');}
+  if(tokens.length>=2&&tokens[0]==='look'&&(tokens[1]==='in'||tokens[1]==='inside')){tokens.splice(0,2,'search');}
   if(tokens.length>=2&&tokens[0]==='climb'&&tokens[1]==='down'){return{verb:'go',noun:'down',prep:null,noun2:null};}
   if(tokens.length>=2&&tokens[0]==='climb'&&tokens[1]==='up'){return{verb:'go',noun:'up',prep:null,noun2:null};}
   let verbWord = tokens[0];
@@ -153,6 +175,8 @@ function parseInput(raw) {
   if(pi>-1){noun=rest.slice(0,pi).join(' ')||null;noun2=rest.slice(pi+1).join(' ')||null;}
   else{noun=rest.join(' ')||null;}
   if(verb==='go'&&noun&&DIR_MAP[noun])noun=DIR_MAP[noun];
+  // Handle "go into X" / "go in X" where prep splits noun to null
+  if(verb==='go'&&!noun&&noun2&&(prep==='into'||prep==='in'||prep==='to')){noun='enter';prep=null;noun2=null;}
   return {verb,noun,prep,noun2};
 }
 
@@ -176,6 +200,20 @@ function drawCurrentScene() {
 
 function redrawScene() { drawCurrentScene(); }
 
+// Sierra-style death with restore prompt
+function sierraDeath(deathText, tip) {
+  addText('','error');
+  addText(deathText,'error');
+  addText('','error');
+  addText('Oh dear, you have died.','error');
+  if(tip) addText(tip,'system');
+  addText('','system');
+  addText('But fear not! Type RESTORE to load your last save, or RESTART to begin anew.','system');
+  playError();
+  // Auto-restore state (Sierra mercy mode - just rewind to before the action)
+  // The death is cosmetic -- the player isn't actually dead
+}
+
 function processCommand(raw) {
   const cmd = parseInput(raw);
   if(!cmd) return;
@@ -189,9 +227,48 @@ function processCommand(raw) {
     return;
   }
   if(cmd.verb==='help'){
-    addText('Commands: LOOK, TAKE, USE [x] ON [y], GO [dir], N/S/E/W/U/D','system');
-    addText('TALK, OPEN, UNLOCK, SEARCH, READ, TIE, LIGHT, POUR','system');
-    addText('EAT, SWIM, CUT, GIVE, PET, ANSWER, INVENTORY (I), HELP','system');
+    addText('--- COMMANDS ---','system');
+    addText('LOOK / EXAMINE [object]  - Inspect surroundings or an object','system');
+    addText('TAKE / GET [item]        - Pick up an item','system');
+    addText('USE [item] ON [target]   - Use an item with something','system');
+    addText('  Example: USE PLANK ON WELL, USE KEY ON DOOR','system');
+    addText('GO [N/S/E/W/U/D]        - Move in a direction','system');
+    addText('SEARCH [place]           - Search a location','system');
+    addText('ANSWER [guess]           - Answer a riddle or puzzle','system');
+    addText('TALK / OPEN / TIE / CUT / LIGHT / POUR / READ','system');
+    addText('EAT / GIVE / PET / SWIM / CLIMB','system');
+    addText('INVENTORY (I) - Check items  |  SAVE / LOAD - Save or load game','system');
+    addText('MAP - View island map  |  RESTART - Start over','system');
+    return;
+  }
+  if(cmd.noun==='map'&&cmd.verb==='look'||cmd.verb==='map'){
+    addText('=== ISLE OF MERIDIA ===','system');
+    addText('','system');
+    addText('            [Temple Interior]','system');
+    addText('                  |','system');
+    addText('[Cave]--[Coastal Path]--[Jungle]--[Temple]','system');
+    addText('              |                      |','system');
+    addText('          [Beach]             [Cliff Overlook]','system');
+    addText('                                     |','system');
+    addText('[Hidden Cove]----[Lighthouse Base]---+','system');
+    addText('                       |','system');
+    addText('                [Lighthouse Top]','system');
+    addText('','system');
+    const rm = state.currentRoom.replace(/_/g,' ');
+    addText('You are at: '+rm.charAt(0).toUpperCase()+rm.slice(1),'narration');
+    return;
+  }
+  if(cmd.verb==='restart'){
+    state.currentRoom=null;state.inventory=[];state.score=0;state.turns=0;
+    state.scored={};state.flags={vines_cleared:false,lamp_lit:false,well_bridged:false,
+      temple_open:false,rope_tied:false,lighthouse_unlocked:false,lens_placed:false,
+      oil_poured:false,lighthouse_lit:false,hut_searched:false,journal_read:false,parrot_fed:false};
+    updateInv();updateScore();outputEl.innerHTML='';
+    document.getElementById('text-input').disabled=false;
+    document.getElementById('text-input').placeholder='Type a command...';
+    addText('THE LIGHTHOUSE OF MERIDIA','victory');
+    addText('Game restarted.','system');addText('','system');
+    moveToRoom('beach');
     return;
   }
   if(cmd.verb==='look'&&!cmd.noun){
@@ -219,6 +296,21 @@ function processCommand(raw) {
     try{localStorage.setItem('meridia_save',JSON.stringify(state));addText('Game saved.','system');playSuccess();}catch(e){addText('Save failed.','error');}
     return;
   }
+  if(cmd.verb==='load'||cmd.verb==='restore'){
+    try{
+      const data=localStorage.getItem('meridia_save');
+      if(!data){addText('No saved game found.','error');return;}
+      const s=JSON.parse(data);
+      state.currentRoom=s.currentRoom;state.inventory=s.inventory;state.score=s.score;
+      state.turns=s.turns;state.scored=s.scored;state.flags=s.flags;
+      updateInv();updateScore();
+      const room=ROOMS[state.currentRoom];
+      if(room){roomNameEl.textContent=room.name;addText('Game loaded.','system');addText('');
+        addText('\u2014 '+room.name+' \u2014','narration');addText(room.getDescription(),'narration');drawCurrentScene();}
+      playSuccess();
+    }catch(e){addText('Load failed.','error');}
+    return;
+  }
   // Look at inventory items
   if(cmd.verb==='look'&&cmd.noun){
     const invDesc = getInventoryItemDesc(cmd.noun);
@@ -226,27 +318,29 @@ function processCommand(raw) {
   }
   // Room-specific handler
   if(handleRoomCommand(cmd)) return;
-  // Defaults
+  // Defaults -- in Captain Voss's voice
+  const pick = arr => arr[state.turns % arr.length];
   switch(cmd.verb){
-    case'take':addText("You don't see that here.");break;
-    case'use':addText("That doesn't seem to work.");break;
-    case'look':addText("You don't see anything special about that.");break;
-    case'talk':addText("There's nobody here to talk to.");break;
-    case'open':case'unlock':addText("You can't open that.");break;
-    case'read':addText("There's nothing to read here.");break;
-    case'search':addText("You don't find anything interesting.");break;
-    case'eat':addText("You can't eat that!");break;
-    case'swim':addText("The currents are far too dangerous!");break;
-    case'climb':addText("You can't climb that.");break;
-    case'push':case'pull':addText("Nothing happens.");break;
-    case'tie':addText("You can't tie that to anything useful.");break;
-    case'light':addText("You can't light that.");break;
-    case'pour':addText("There's nothing to pour.");break;
-    case'cut':addText("There's nothing to cut here.");break;
-    case'drop':addText("You might need that. Better hold onto it.");break;
-    case'pet':addText("There's nothing here to pet.");break;
-    case'give':addText("There's nobody to give that to.");break;
-    default:addText('I don\'t understand "'+cmd.verb+'". Type HELP for commands.','error');break;
+    case'take':addText(pick(["Nothing of the sort here, Captain.","Your cartographer's eye sees nothing to take.","That's not something you can pick up."]));break;
+    case'use':addText(pick(["That combination doesn't accomplish anything.","Hmm, no. That doesn't work.","You turn it over in your hands, but no -- that's not useful here."]));break;
+    case'look':addText(pick(["Nothing remarkable about that.","You give it a thorough look. Nothing special.","Your keen cartographer's eye finds nothing notable."]));break;
+    case'talk':addText(pick(["You address the empty air. It does not reply.","There's nobody here to converse with, Captain.","Talking to yourself is a sign of too long at sea."]));break;
+    case'open':case'unlock':addText("That's not something you can open.");break;
+    case'read':addText("There's nothing legible here.");break;
+    case'search':addText("You search thoroughly but find nothing of interest.");break;
+    case'eat':addText("A captain must maintain standards. You can't eat that.");break;
+    case'swim':addText("The currents are treacherous. You've sailed enough seas to know a death-trap when you see one.");break;
+    case'climb':addText("There's nothing here worth climbing, and your sea legs aren't what they used to be.");break;
+    case'push':case'pull':addText("You give it a good shove. Nothing happens.");break;
+    case'tie':addText("There's nothing here worth tying a rope to.");break;
+    case'light':addText("You can't light that. You'd need proper fuel and flame.");break;
+    case'pour':addText("There's nothing here to pour.");break;
+    case'cut':addText("There's nothing here that needs cutting.");break;
+    case'drop':addText("A good sailor never discards useful cargo. You might need that.");break;
+    case'pet':addText("There's nothing here that would appreciate being petted.");break;
+    case'give':addText("There's nobody here to receive a gift.");break;
+    case'answer':addText("There's no riddle to answer here. Perhaps elsewhere on the island...");break;
+    default:addText('Captain Voss frowns. "'+cmd.verb+'" isn\'t in her vocabulary. Type HELP for commands.','error');break;
   }
 }
 
@@ -353,7 +447,7 @@ function drawBeach(c,w,h,st){
   }
   // Plank in debris (if not taken)
   if(!st.inventory.includes('plank')){
-    c.fillStyle=EGA.YELLOW;c.fillRect(150,150,40,6);c.fillStyle=EGA.BROWN;c.fillRect(150,150,40,1);c.fillRect(150,155,40,1);
+    c.fillStyle=EGA.LTGRAY;c.fillRect(150,150,40,6);c.fillStyle=EGA.BROWN;c.fillRect(150,150,40,1);c.fillRect(150,155,40,1);
   }
   // Scattered debris
   c.fillStyle=EGA.BROWN;c.fillRect(120,160,8,3);c.fillRect(280,145,6,3);c.fillRect(100,170,10,2);
@@ -415,10 +509,13 @@ function drawVillage(c,w,h,st){
   // Background vegetation
   c.fillStyle=EGA.GREEN;c.fillRect(0,40,320,30);
   c.fillStyle=EGA.LTGREEN;c.fillRect(10,35,30,15);c.fillRect(80,38,25,12);c.fillRect(250,32,40,18);
-  // Ground - cobblestone
-  c.fillStyle=EGA.DKGRAY;c.fillRect(0,70,320,130);
+  // Ground - earthy cobblestone with moss
+  c.fillStyle=EGA.BROWN;c.fillRect(0,70,320,130);
   c.fillStyle=EGA.LTGRAY;
   for(let x=0;x<320;x+=10){for(let y=75;y<200;y+=10){if((x+y)%20===0)c.fillRect(x+1,y+1,8,8);}}
+  // Moss patches on ground
+  c.fillStyle=EGA.GREEN;
+  c.fillRect(5,85,8,4);c.fillRect(140,170,10,3);c.fillRect(280,90,6,4);c.fillRect(60,180,8,3);c.fillRect(200,160,7,4);
   // Left hut
   c.fillStyle=EGA.LTGRAY;c.fillRect(20,80,70,60);
   c.fillStyle=EGA.DKGRAY;c.fillRect(18,78,74,4);
@@ -645,7 +742,7 @@ function drawTempleInterior(c,w,h,st){
   c.fillStyle=EGA.LTGRAY;
   for(let y=0;y<200;y+=16){for(let x=0;x<320;x+=20){c.fillRect(x+1,y+1,18,14);}}
   // Darken edges
-  c.fillStyle='rgba(0,0,0,0.3)';c.fillRect(0,0,40,200);c.fillRect(280,0,40,200);
+  c.fillStyle=EGA.DKGRAY;c.fillRect(0,0,40,200);c.fillRect(280,0,40,200);
   // Light shafts from ceiling
   c.fillStyle=EGA.YELLOW;
   // Shaft 1
@@ -932,18 +1029,21 @@ function drawTitleScreen(c,w,h){
   // E
   c.fillRect(70,90,4,16);c.fillRect(70,90,12,3);c.fillRect(70,97,10,3);c.fillRect(70,103,12,3);
   c.fillStyle=EGA.WHITE;
-  // Subtitle
+  // Subtitle using fillText
   c.font='8px monospace';
-  // Draw "LIGHTHOUSE OF MERIDIA" with pixels
+  c.textAlign='center';
   c.fillStyle=EGA.LTCYAN;
-  c.fillRect(50,115,220,3);// decorative line
+  c.fillText('LIGHTHOUSE OF MERIDIA',160,120);
+  // Decorative lines around subtitle
+  c.fillStyle=EGA.LTCYAN;
+  c.fillRect(50,124,220,1);
+  c.fillRect(50,112,220,1);
   c.fillStyle=EGA.WHITE;
-  c.fillRect(55,113,2,7);c.fillRect(265,113,2,7);// end caps
-  // "Press ENTER" text approximation
+  c.fillRect(55,112,2,13);c.fillRect(265,112,2,13);// end caps
+  // "Type a command to begin" prompt
   c.fillStyle=EGA.LTGRAY;
-  c.fillRect(90,175,140,3);// line
-  c.fillStyle=EGA.WHITE;
-  c.fillRect(95,180,130,2);
+  c.fillText('Type a command to begin your adventure',160,182);
+  c.textAlign='left';
   // Rocks at lighthouse base
   c.fillStyle=EGA.DKGRAY;c.fillRect(130,148,60,6);c.fillRect(125,150,70,4);
 }
@@ -1001,7 +1101,7 @@ const ROOMS = {
       if(!state.inventory.includes('bucket')) d += " An old BUCKET sits by the well.";
       let wellState = "";
       if(!state.flags.well_bridged) wellState = " The well opening is too wide to reach across safely.";
-      else if(!state.scored['get_key']) wellState = " Your plank bridges the well opening. You could try to retrieve something from the bottom.";
+      else if(!state.scored['Retrieved the key from the well']) wellState = " Your plank bridges the well opening. You could try to retrieve something from the bottom.";
       d += wellState;
       d += " The path leads SOUTH.";
       return d;
@@ -1144,9 +1244,9 @@ function handleRoomCommand(cmd) {
     }
   }
   if(v==='read' && matchNoun(n,'journal')){
-    addText("The journal belonged to the last lighthouse keeper. It reads:",'narration');
-    addText('"The lighthouse needs three things to shine: the Crystal Lens of the Meridians, the Sacred Oil, and living flame. I hid the oil in the sea cave when the shadows came. If you are reading this, you are the island\'s last hope. Relight the beacon. Guide the lost ones home."','lore');
-    state.flags.journal_read = true;
+    if(!state.flags.journal_read){addText("You haven't found a journal to read.");return true;}
+    addText("You re-read Keeper Aldric's journal:",'narration');
+    addText('"The lighthouse needs three things: the Crystal Lens (in the temple), the Sacred Oil (hidden in the cave), and living flame. Relight the beacon. Guide the lost ones home."','lore');
     return true;
   }
 
@@ -1173,7 +1273,7 @@ function handleRoomCommand(cmd) {
       return true;
     }
     if(v==='swim'){
-      addText("You wade in up to your knees, but the undertow is terrifyingly strong. The currents would sweep you out to sea in seconds. Swimming is not an option.");
+      sierraDeath("You wade bravely into the surf. The undertow grabs your legs with icy fingers and drags you under. The last thing you see is the sky, growing smaller above the dark water...", "Tip: The ocean around Meridia is treacherous. Perhaps there's another way to get rescued.");
       return true;
     }
     if(v==='look' && matchNoun(n,'sail')){
@@ -1264,7 +1364,7 @@ function handleRoomCommand(cmd) {
     }
     if(v==='look' && matchNoun(n,'well')){
       if(!state.flags.well_bridged) addText("A deep stone well in the village square. The opening is quite wide - too far to reach across safely. Something glints faintly at the bottom.");
-      else if(!state.scored['get_key']) addText("Your plank bridges the well opening. You can now reach across. Something glints at the bottom... if only you could lower something down there.");
+      else if(!state.scored['Retrieved the key from the well']) addText("Your plank bridges the well opening. You can now reach across. Something glints at the bottom... if only you could lower something down there.");
       else addText("An old stone well. You already retrieved the key from the bottom.");
       return true;
     }
@@ -1321,8 +1421,9 @@ function handleRoomCommand(cmd) {
     }
     if(v==='take' && matchNoun(n,'journal','book')){
       if(!state.flags.lamp_lit){addText("It's too dark to see anything deeper in the cave.");return true;}
-      addText("You pick up the weathered journal and read it...");
-      addText('"The lighthouse needs three things: the Crystal Lens, the Sacred Oil, and living flame. I hid the oil here when the shadows came. Relight the beacon. Guide the lost ones home." - Final entry of Keeper Aldric','lore');
+      addText("You pick up the weathered journal. The leather cover is cracked and sea-stained. You open it carefully...");
+      addText('"Day 1,247. The shadows grow bolder each night. They press against the lighthouse glass like dark hands seeking the flame. I have made a terrible decision -- I have hidden the sacred oil here in the cave and sealed the Crystal Lens in the temple. Without all three elements together, the shadows cannot corrupt the light. But without the light, I am alone." - Keeper Aldric','lore');
+      addText('"Day 1,248. If you are reading this, I am gone. The lighthouse needs three things to shine again: the Crystal Lens (I sealed it in the temple), the Sacred Oil (hidden on the shelf behind you), and living flame. Relight the beacon. Guide the lost ones home. Do not let Meridia fall to darkness." - Final entry','lore');
       state.flags.journal_read=true;
       return true;
     }
@@ -1350,18 +1451,22 @@ function handleRoomCommand(cmd) {
     }
     if(v==='talk' && matchNoun(n,'parrot','bird')){
       addText("The parrot cocks its head, fixes you with a beady eye, and squawks:");
-      addText('"Maaap! SQUAWK! The answer is always a maaap! Cities without houses! Forests without trees! MAAAP!"','lore');
+      if(state.flags.parrot_fed){
+        addText('"SQUAWK! Cities with no houses! Forests with no trees! Water with no fish! What has these things? Think flat! Think paper! SQUAWK!"','lore');
+      } else {
+        addText('"SQUAWK! Hungry! Pretty bird is HUNGRY! Give me something tasty and I\'ll tell you a secret! SQUAWK!"','lore');
+      }
       return true;
     }
     if(v==='pet' && matchNoun(n,'parrot','bird')){
       addText("You gently reach toward the parrot. It tolerates your affection with dignified annoyance, allowing you to stroke its brilliant feathers for exactly three seconds before nibbling your finger in warning.");
       return true;
     }
-    if(v==='give' && matchNoun(n,'fruit') && matchNoun(n2,'parrot','bird')){
+    if(v==='give' && ((matchNoun(n,'fruit')&&matchNoun(n2,'parrot','bird'))||(matchNoun(n,'parrot','bird')&&matchNoun(n2,'fruit'))||(matchNoun(n,'fruit')&&!n2))){
       if(!hasItem('exotic_fruit')){addText("You don't have any fruit.");return true;}
       addText("The parrot eagerly snatches the fruit from your hand and devours it with enthusiastic squawks. Juice drips from its beak.");
-      addText('"SQUAWK! Good human! MAP MAP MAP! The answer to everything is MAP! SQUAWK!"','lore');
-      removeItem('exotic_fruit');
+      addText('"SQUAWK! Good human! Tasty! Now I tell you secret! Cities with no houses... forests with no trees... water with no fish... What has all these things? Think flat! Think paper! SQUAWK!"','lore');
+      removeItem('exotic_fruit'); state.flags.parrot_fed=true;
       return true;
     }
     if(v==='look' && matchNoun(n,'parrot','bird')){
@@ -1383,7 +1488,7 @@ function handleRoomCommand(cmd) {
   if(room==='temple_exterior'){
     if((v==='answer'||v==='say') && matchNoun(n,'map')){
       if(state.flags.temple_open){addText("The door is already open.");return true;}
-      addText("You speak the word aloud, your voice echoing off the ancient stone: \"A MAP!\"");
+      addText("You speak the word aloud, your voice echoing off the ancient stone: \"A MAP!\" Of course -- you're a cartographer. It's always been maps.");
       addText("");
       addText("The ground trembles beneath your feet. Deep within the walls, ancient gears grind and stone scrapes against stone. Dust cascades from the carved symbols as they flare bright cyan.");
       addText("");
@@ -1470,8 +1575,12 @@ function handleRoomCommand(cmd) {
       return true;
     }
     if(v==='climb' && matchNoun(n,'down','cliff','rope')){
-      if(!state.flags.rope_tied){addText("The cliff is too steep and dangerous to climb without a rope!");playError();return true;}
+      if(!state.flags.rope_tied){sierraDeath("You attempt to climb down the sheer cliff face. For a moment, you find handholds in the rock. Then your foot slips. You tumble, bouncing off rocks, and crash onto the promontory below...", "Tip: You'll need a rope and something to secure it to before climbing down.");return true;}
       moveToRoom('lighthouse_base');return true;
+    }
+    if(v==='jump'){
+      sierraDeath("You leap majestically off the cliff. For one glorious second, you feel like a seabird. Then gravity reminds you that you are, in fact, a cartographer.", "Tip: Jumping off cliffs is rarely the solution to any puzzle.");
+      return true;
     }
     return false;
   }
@@ -1606,7 +1715,7 @@ function victorySequence(){
     {t:"",c:'',d:2400},
     {t:"The Crystal Lens focuses the flame into a brilliant beam of pure white light that ERUPTS from the lighthouse top!",c:'success',d:3200},
     {t:"",c:'',d:4000},
-    {t:"The beam sweeps across the dark ocean like a blade of hope cutting through the void.",c:'narration',d:4800},
+    {t:"The beam sweeps across the dark ocean, cutting through the night like a golden blade.",c:'narration',d:4800},
     {t:"",c:'',d:5600},
     {t:"On the horizon, the distant ship turns. It's seen the light!",c:'success',d:6400},
     {t:"",c:'',d:7200},
@@ -1614,15 +1723,18 @@ function victorySequence(){
     {t:"",c:'',d:8800},
     {t:"As the ship approaches, the lighthouse hums with ancient energy. The shadows that clung to the island melt away in the sacred light. The curse of Meridia is broken at last.",c:'narration',d:9600},
     {t:"",c:'',d:10400},
-    {t:"Hours later, you stand on the deck of the rescue vessel, watching the lighthouse beam grow smaller behind you. Captain Elara Voss, cartographer, castaway, and now... Lighthouse Keeper of legend.",c:'narration',d:11200},
+    {t:"You press your hand against the warm brass of the mechanism and whisper: \"I kept the light burning, Aldric. I kept my promise.\"",c:'narration',d:11200},
     {t:"",c:'',d:12000},
-    {t:"The Lighthouse of Meridia shines once more, a beacon for all lost souls.",c:'lore',d:12800},
+    {t:"Hours later, standing on the deck of the rescue vessel, you watch the lighthouse beam grow smaller behind you. You reach into your coat and pull out your cartographer's compass. Time to add one more island to the charts -- the one that saved you.",c:'narration',d:12800},
     {t:"",c:'',d:13600},
-    {t:"\u2605 \u2605 \u2605  C O N G R A T U L A T I O N S  \u2605 \u2605 \u2605",c:'victory',d:14400},
-    {t:"Final Score: " + (state.score) + "/100 points in " + state.turns + " turns",c:'victory',d:15200},
-    {t:"",c:'',d:16000},
-    {t:"Thank you for playing THE LIGHTHOUSE OF MERIDIA",c:'victory',d:16800},
-    {t:"A Sierra Nevada Adventure \u00a9 2026",c:'system',d:17600}
+    {t:"The Lighthouse of Meridia shines once more, a beacon for all lost souls.",c:'lore',d:14400},
+    {t:"",c:'',d:13600},
+    {t:"\u2605 \u2605 \u2605  C O N G R A T U L A T I O N S  \u2605 \u2605 \u2605",c:'victory',d:16000},
+    {t:"Final Score: " + (state.score) + "/100 points in " + state.turns + " turns",c:'victory',d:16800},
+    {t:"",c:'',d:17600},
+    {t:"Thank you for playing THE LIGHTHOUSE OF MERIDIA",c:'victory',d:18400},
+    {t:"A Sierra Nevada Adventure \u00a9 2026",c:'system',d:19200},
+    {t:"Type RESTART to play again.",c:'system',d:20000}
   ];
 
   // Disable input during victory
@@ -1635,13 +1747,13 @@ function victorySequence(){
   });
 
   // Play victory fanfare
-  setTimeout(playVictoryFanfare, 14400);
-  
+  setTimeout(playVictoryFanfare, 16000);
+
   // Re-enable input after sequence
   setTimeout(function(){
     document.getElementById('text-input').disabled = false;
-    document.getElementById('text-input').placeholder = "The adventure is over. Refresh to play again!";
-  }, 18000);
+    document.getElementById('text-input').placeholder = "Type RESTART to play again!";
+  }, 20500);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1664,7 +1776,9 @@ window.addEventListener('DOMContentLoaded', function(){
       const val = inputEl.value.trim();
       if(val){
         history.push(val);
+        if(history.length>200) history.shift();
         histIdx = history.length;
+        startAmbient();
         processCommand(val);
       }
       inputEl.value = '';
