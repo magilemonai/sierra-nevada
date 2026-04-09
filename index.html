@@ -25,6 +25,16 @@ body{background:#000;color:#aaa;font-family:'Press Start 2P','Courier New',monos
 #input-prompt{color:#55FF55;margin-right:6px;font-size:11px}
 #text-input{flex:1;background:transparent;border:none;color:#FFF;font-family:'Press Start 2P','Courier New',monospace;font-size:11px;outline:none;caret-color:#55FF55}
 #text-input::placeholder{color:#555}
+@media(max-width:480px){
+  body{font-size:9px;padding:0}
+  #game-container{border:none;box-shadow:none}
+  #title-bar{font-size:7px;padding:2px 4px}
+  #inventory-bar{font-size:7px;padding:2px 4px}
+  #text-output{height:120px;font-size:8px;padding:4px}
+  #text-input{font-size:9px}
+  #input-prompt{font-size:9px}
+  #room-name{font-size:7px}
+}
 </style>
 </head>
 <body>
@@ -77,7 +87,7 @@ const state = {
   currentRoom: null, inventory: [], score: 0, turns: 0, scored: {},
   flags: {vines_cleared:false,lamp_lit:false,well_bridged:false,temple_open:false,
     rope_tied:false,lighthouse_unlocked:false,lens_placed:false,oil_poured:false,
-    lighthouse_lit:false,hut_searched:false,journal_read:false,parrot_fed:false}
+    lighthouse_lit:false,hut_searched:false,journal_read:false,parrot_fed:false,fruit_eaten:false}
 };
 
 let canvas, ctx, outputEl, inputEl, roomNameEl;
@@ -89,7 +99,8 @@ function addText(text, cls) {
   if((!cls || cls==='narration') && text && /\b[A-Z]{2,}\b/.test(text)){
     const parts = text.split(/(\b[A-Z]{2,}\b)/g);
     parts.forEach(part => {
-      if(/^[A-Z]{2,}$/.test(part)){
+      const DIR_WORDS = ['NORTH','SOUTH','EAST','WEST','UP','DOWN','AND','THE','BUT','YOU','OR','IT','IS','IF','AN','TO','IN','ON','OF','AT','BY','NO'];
+      if(/^[A-Z]{2,}$/.test(part) && !DIR_WORDS.includes(part)){
         const span = document.createElement('span');
         span.style.color = '#55FFFF';
         span.textContent = part;
@@ -270,7 +281,7 @@ function processCommand(raw) {
     state.currentRoom=null;state.inventory=[];state.score=0;state.turns=0;
     state.scored={};state.flags={vines_cleared:false,lamp_lit:false,well_bridged:false,
       temple_open:false,rope_tied:false,lighthouse_unlocked:false,lens_placed:false,
-      oil_poured:false,lighthouse_lit:false,hut_searched:false,journal_read:false,parrot_fed:false};
+      oil_poured:false,lighthouse_lit:false,hut_searched:false,journal_read:false,parrot_fed:false,fruit_eaten:false};
     updateInv();updateScore();outputEl.innerHTML='';
     document.getElementById('text-input').disabled=false;
     document.getElementById('text-input').placeholder='Type a command...';
@@ -1249,7 +1260,7 @@ function handleRoomCommand(cmd) {
   if(v==='eat' && matchNoun(n,'fruit')){
     if(hasItem('exotic_fruit')){
       addText("You bite into the exotic fruit. It tastes like a strange mix of mango, starfruit, and regret. Interesting, but not unpleasant.");
-      removeItem('exotic_fruit');
+      removeItem('exotic_fruit'); state.flags.fruit_eaten=true;
       return true;
     }
   }
@@ -1463,6 +1474,8 @@ function handleRoomCommand(cmd) {
       addText("The parrot cocks its head, fixes you with a beady eye, and squawks:");
       if(state.flags.parrot_fed){
         addText('"SQUAWK! Cities with no houses! Forests with no trees! Water with no fish! What has these things? Think flat! Think paper! SQUAWK!"','lore');
+      } else if(state.flags.fruit_eaten){
+        addText('"SQUAWK! You ATE my treat! Rude human! But pretty bird is generous... cities, no houses... forests, no trees... SQUAWK! Figure it out yourself!"','lore');
       } else {
         addText('"SQUAWK! Hungry! Pretty bird is HUNGRY! Give me something tasty and I\'ll tell you a secret! SQUAWK!"','lore');
       }
@@ -1810,12 +1823,14 @@ window.addEventListener('DOMContentLoaded', function(){
   addText("THE LIGHTHOUSE OF MERIDIA",'victory');
   addText("A Sierra-Style Adventure Game",'system');
   addText("");
-  addText("You are Captain Elara Voss, cartographer aboard The Cartographer's Dream. A terrible storm has wrecked your ship on the shores of the legendary Lost Isle of Meridia.",'narration');
+  addText("Salt stings your eyes. Sand grinds between your teeth. You cough seawater and drag yourself upright on a strange beach, the wreckage of your ship -- The Cartographer's Dream -- scattered across the shore behind you.",'narration');
   addText("");
-  addText("Legend says the Meridians built an enchanted lighthouse that could guide any lost soul home. But the light went dark centuries ago, and the Meridians vanished...",'lore');
+  addText("You are Captain Elara Voss, cartographer. You remember the storm, the crack of the mast, the cold embrace of the sea. And now... this island.",'narration');
+  addText("");
+  addText("Legend speaks of the Lost Isle of Meridia, where an ancient people built an enchanted lighthouse that could guide any lost soul home. But the light went dark centuries ago, and the Meridians vanished...",'lore');
   addText("");
   addText("Find a way to relight the lighthouse and signal for rescue!",'system');
-  addText("Type HELP for a list of commands.",'system');
+  addText("Type HELP for a list of commands. Type MAP to view the island.",'system');
   addText("");
 
   // Start in beach
